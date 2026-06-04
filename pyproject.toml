@@ -1,0 +1,22 @@
+[project]
+name = "agentic-tello"
+version = "0.1.0"
+description = "Agentic vision-driven Tello controller — local VLM + open-vocab detector, sense-plan-act"
+readme = "README.md"
+authors = [
+    { name = "Pablo Martinez Agullo", email = "pmartinez@indra.es" },
+]
+license = { file = "LICENSE" }
+requires-python = ">=3.12"
+dependencies = [
+    "av>=17.0.1",
+    "clip-anytorch>=2.6.0",
+    "djitellopy>=2.5.0",
+    "fastapi>=0.136.3",
+    "ftfy>=6.3.1",
+    "numpy>=2.4.6",
+    "openai>=2.41.0",
+    "opencv-python>=4.13.0.92",
+    "ultralytics>=8.4.60",
+    "uvicorn[standard]>=0.48.0",
+]

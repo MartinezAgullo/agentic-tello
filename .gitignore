@@ -1,0 +1,40 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv/
+
+# Runtime output
+snapshots/
+
+# Model weights — downloaded automatically on first run (ultralytics)
+*.pt
+*.pth
+*.onnx
+*.engine
+
+# Environment / secrets
+.env
+.env.*
+
+# OS / editor cruft
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Agent harnesses (Claude Code, Cursor, Aider, etc.)
+CLAUDE.md
+to_do.md
+.claude/
+.cursor/
+.cursorrules
+.aider*
+.github/copilot-instructions.md
+GEMINI.md
+.windsurfrules

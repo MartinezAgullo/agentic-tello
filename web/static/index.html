@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agentic Tello</title>
+<style>
+  :root { --bg:#15171c; --panel:#1e2128; --line:#2c303a; --txt:#e6e8ec; --dim:#9aa0ab;
+          --ok:#36d399; --warn:#fbbd23; --err:#f87272; --accent:#3b82f6; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.5 ui-monospace,Menlo,Consolas,monospace;
+         background:var(--bg); color:var(--txt); }
+  header { padding:10px 16px; border-bottom:1px solid var(--line); display:flex;
+           align-items:center; gap:16px; }
+  header h1 { font-size:16px; margin:0; font-weight:700; }
+  #mode { padding:2px 10px; border-radius:4px; font-weight:700; }
+  .MANUAL { background:#3a2a10; color:var(--warn); }
+  .AUTO   { background:#0f2e22; color:var(--ok); }
+  main { display:grid; grid-template-columns:2fr 1fr; gap:14px; padding:14px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; }
+  #video { width:100%; border-radius:6px; background:#000; display:block; }
+  .grid { display:grid; grid-template-columns:auto auto; gap:2px 14px; margin-top:10px; }
+  .grid .k { color:var(--dim); } .grid .v { text-align:right; }
+  .btns { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+  button { background:#262a33; color:var(--txt); border:1px solid var(--line);
+           border-radius:6px; padding:8px 12px; cursor:pointer; font:inherit; }
+  button:hover { border-color:var(--accent); }
+  #estop { background:#4a1414; border-color:#7a2222; color:#ffd7d7; font-weight:700;
+           flex:1 0 100%; padding:12px; }
+  #estop:hover { background:#5e1818; }
+  #toggle { background:#13233f; border-color:#274a82; }
+  .goal { display:flex; gap:8px; margin-top:12px; }
+  .goal input { flex:1; background:#13151a; border:1px solid var(--line); color:var(--txt);
+                border-radius:6px; padding:8px; font:inherit; }
+  #log { height:260px; overflow-y:auto; background:#13151a; border:1px solid var(--line);
+         border-radius:6px; padding:8px; margin-top:12px; white-space:pre-wrap;
+         font-size:12.5px; color:#cfd3da; }
+  .help { color:var(--dim); font-size:12px; margin-top:10px; }
+  .help b { color:var(--txt); }
+  h3 { margin:0 0 6px; font-size:13px; color:var(--dim); text-transform:uppercase; letter-spacing:.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Agentic Tello</h1>
+  <span id="mode" class="MANUAL">MANUAL</span>
+  <span id="conn" style="color:var(--err)">● disconnected</span>
+</header>
+
+<main>
+  <section class="panel">
+    <img id="video" src="/video" alt="live feed">
+    <div class="help">
+      Click the video first (to capture keys). Control pauses while you type in the goal/detect boxes.
+      <b>W/S</b> fwd/back · <b>A/D</b> strafe · <b>↑/↓</b> up/down · <b>←/→</b> yaw ·
+      <b>T</b> takeoff · <b>L</b> land · <b>Esc</b> emergency
+    </div>
+  </section>
+
+  <section>
+    <div class="panel">
+      <h3>Telemetry</h3>
+      <div class="grid" id="tel">
+        <span class="k">Battery</span><span class="v" id="battery">—</span>
+        <span class="k">Height</span><span class="v" id="height">—</span>
+        <span class="k">Stream fps</span><span class="v" id="fps">—</span>
+        <span class="k">Pos (cm)</span><span class="v" id="pos">—</span>
+        <span class="k">Heading</span><span class="v" id="heading">—</span>
+        <span class="k">Flying</span><span class="v" id="flying">—</span>
+        <span class="k">Detections</span><span class="v" id="detn">—</span>
+        <span class="k">Det fps</span><span class="v" id="detfps">—</span>
+        <span class="k">Mission</span><span class="v" id="phase">—</span>
+        <span class="k">Target</span><span class="v" id="target">—</span>
+      </div>
+      <div class="btns">
+        <button onclick="cmd('takeoff')">Takeoff (T)</button>
+        <button onclick="cmd('land')">Land (L)</button>
+        <button id="toggle" onclick="toggleMode()">Arm AUTO</button>
+        <button onclick="cmd('snapshot')">Snapshot</button>
+        <button id="estop" onclick="estop()">■ EMERGENCY STOP (Esc)</button>
+      </div>
+      <div class="goal">
+        <input id="goalbox" placeholder="goal e.g. go to the plant and take a picture">
+        <button onclick="sendGoal()">Send</button>
+      </div>
+      <div class="goal">
+        <input id="detectbox" placeholder="detect e.g. potted plant, chair, person">
+        <button onclick="sendQueries()">Detect</button>
+        <button onclick="sendQueriesAll()" title="detect all 80 COCO classes"
+                style="flex:0 0 auto; padding:8px 10px; font-size:12px;">All</button>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:14px">
+      <h3>Decision / Event log</h3>
+      <div id="log"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+let ws, mode = "MANUAL";
+const $ = id => document.getElementById(id);
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen  = () => { $("conn").style.color = "var(--ok)"; $("conn").textContent = "● connected"; };
+  ws.onclose = () => { $("conn").style.color = "var(--err)"; $("conn").textContent = "● disconnected";
+                       setTimeout(connect, 1000); };
+  ws.onmessage = ev => {
+    const m = JSON.parse(ev.data);
+    if (m.status) renderStatus(m.status);
+    if (m.log) { const el = $("log");
+      m.log.forEach(l => el.textContent += l + "\n");
+      el.scrollTop = el.scrollHeight; }
+  };
+}
+function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
+
+function renderStatus(s) {
+  if (s.mode && s.mode !== mode) setMode(s.mode);
+  const set = (id, v) => $(id).textContent = (v === undefined || v === null) ? "—" : v;
+  set("battery", s.battery !== undefined ? s.battery + "%" : "—");
+  set("height", s.height_cm !== undefined ? s.height_cm + " cm" : "—");
+  set("fps", s.stream_fps);
+  set("pos", s.pos ? `${s.pos[0]}, ${s.pos[1]}` : "—");
+  set("heading", s.heading !== undefined ? s.heading + "°" : "—");
+  set("flying", s.flying === undefined ? "—" : (s.flying ? "yes" : "no"));
+  set("detn", s.det_n);
+  set("detfps", s.det_fps);
+  const m = s.mission || {};
+  set("phase", m.active ? m.phase : (m.phase === "done" ? "done" : "idle"));
+  set("target", m.target || "—");
+  $("battery").style.color = (s.battery <= 20) ? "var(--err)" : "var(--txt)";
+  // drone readiness (distinct from the websocket connection)
+  if (s.error) { $("conn").textContent = "● " + s.error; $("conn").style.color = "var(--err)"; }
+  else if (s.ready) { $("conn").textContent = "● tello connected"; $("conn").style.color = "var(--ok)"; }
+}
+function setMode(m) {
+  mode = m; const el = $("mode"); el.textContent = m; el.className = m;
+  $("toggle").textContent = (m === "AUTO") ? "Switch MANUAL" : "Arm AUTO";
+}
+
+// ── commands ──────────────────────────────────────────────────────────────
+const cmd   = name => send({type:"cmd", name});
+const estop = ()   => send({type:"emergency"});
+function toggleMode() { const next = (mode === "AUTO") ? "MANUAL" : "AUTO";
+                        send({type:"mode", value:next}); setMode(next); }
+function sendGoal() { const t = $("goalbox").value.trim(); if (t) send({type:"goal", text:t}); }
+function sendQueries() { send({type:"queries", text: $("detectbox").value.trim()}); }
+function sendQueriesAll() { send({type:"queries_all"}); }
+
+// ── keyboard → manual stick vector ─────────────────────────────────────────
+const keys = new Set();
+let lastVec = "";
+const MOVE = ["w","s","a","d","arrowup","arrowdown","arrowleft","arrowright"];
+// typing in a text box must NOT drive the drone (E-STOP stays live for safety)
+const typing = e => { const t = e.target;
+  return t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable); };
+function vec() {
+  let lr=0, fb=0, ud=0, yaw=0;
+  if (keys.has("d")) lr=1;  if (keys.has("a")) lr=-1;
+  if (keys.has("w")) fb=1;  if (keys.has("s")) fb=-1;
+  if (keys.has("arrowup")) ud=1;    if (keys.has("arrowdown")) ud=-1;
+  if (keys.has("arrowright")) yaw=1; if (keys.has("arrowleft")) yaw=-1;
+  return {lr,fb,ud,yaw};
+}
+function pushVec() {
+  const v = vec(), s = JSON.stringify(v);
+  if (s !== lastVec) { lastVec = s; send({type:"rc", ...v}); }
+}
+addEventListener("keydown", e => {
+  const k = e.key.toLowerCase();
+  if (k === "escape") { estop(); return; }      // safety: E-STOP always live
+  if (typing(e)) return;                         // typing a goal/query: ignore control keys
+  if (k === "t") { cmd("takeoff"); return; }
+  if (k === "l") { cmd("land"); return; }
+  if (MOVE.includes(k)) { e.preventDefault(); if (!keys.has(k)) { keys.add(k); pushVec(); } }
+});
+addEventListener("keyup", e => {
+  const k = e.key.toLowerCase();
+  if (typing(e)) return;
+  if (MOVE.includes(k)) { keys.delete(k); pushVec(); }
+});
+addEventListener("blur", () => { keys.clear(); pushVec(); });  // safety: release on focus loss
+// entering a text box: release any held stick so the drone doesn't stay latched
+addEventListener("focusin", e => { if (typing(e)) { keys.clear(); pushVec(); } });
+
+connect();
+</script>
+</body>
+</html>
