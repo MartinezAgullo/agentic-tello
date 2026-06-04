@@ -56,5 +56,6 @@ class Servoer:
         done = centered and abs(ea) <= self.area_tol
 
         s = config.SPEED
-        scale = lambda v: int(max(-s, min(s, v * s)))
+        def scale(v):
+            return int(max(-s, min(s, v * s)))
         return 0, scale(fb), scale(ud), scale(yaw), done

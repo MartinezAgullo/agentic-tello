@@ -18,18 +18,26 @@ rule (djitellopy isn't safe for concurrent sends).
 
 import threading
 import time
-from typing import Callable
+from collections.abc import Callable
 
 import config
 from agent import state as S
 from agent.servoing import Servoer
+from brain.prompts import SEARCH_HINTS as _SEARCH_HINTS
 
 # Actions returned by fast_step for the control thread to execute:
-#   ("rc", lr, fb, ud, yaw) | ("hover",) | ("snapshot", label) | ("done",)
+#   ("rc", lr, fb, ud, yaw) | ("rotate", deg) | ("move", direction, cm)
+#   | ("hover",) | ("snapshot", label) | ("done",)
 Action = tuple
 
-_LOST_LIMIT = 25        # fast-ticks with no detection before approach → search
-_SCAN_YAW = 0.45        # fraction of SPEED used to rotate while searching
+_LOST_LIMIT = 25         # fast-ticks with no detection before approach → search
+
+# ── in-room search pattern (within the geofence; never leaves the room) ───────
+_SEARCH_YAW_STEP = 30        # degrees per discrete turn while sweeping a vantage
+_SEARCH_DWELL_S = 0.7        # hold after each turn/step so the detector scans the new view
+_SEARCH_STEP_CM = config.MAX_STEP_CM   # translation between vantage points
+_SEARCH_MAX_VANTAGES = 4     # vantage points to try before giving up (room swept)
+_SEARCH_DIRS = ("forward", "right", "back", "left")  # cycle so a blocked dir doesn't stall
 
 
 class AgentBrain:
@@ -46,9 +54,14 @@ class AgentBrain:
         self.log = log
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._plan_failing = False        # whether the last VLM call failed (warn on edges only)
 
     # ── mission control ─────────────────────────────────────────────────────────
     def start_mission(self, goal: str) -> None:
+        # Re-sending the same goal must not wipe an in-progress mission back to SEARCH.
+        if self.state.active and goal.strip() == self.state.goal.strip():
+            self.log(f"[brain] mission already running: {goal!r} (ignoring duplicate Send)")
+            return
         self.state.reset(goal)
         self.log(f"[brain] mission armed: {goal!r} (Arm AUTO to let it fly)")
         if self._thread is None or not self._thread.is_alive():
@@ -77,8 +90,14 @@ class AgentBrain:
                     self.get_telemetry(), self.state.phase,
                 )
                 self._apply(decision)
+                if self._plan_failing:                   # recovered — say so once
+                    self._plan_failing = False
+                    self.log("[brain] VLM reachable again — planning resumed.")
             except Exception as e:                       # Ollama down / bad JSON — keep flying
-                self.log(f"[brain] plan failed: {e}")
+                if not self._plan_failing:               # warn on the falling edge only (no spam)
+                    self._plan_failing = True
+                    self.log(f"[brain] VLM unreachable, can't plan ({e}). Fast-loop search/"
+                             "approach still runs on the last target; check Ollama.")
             time.sleep(config.VLM_INTERVAL_S)
 
     def _apply(self, d: dict) -> None:
@@ -88,6 +107,12 @@ class AgentBrain:
         if target and target != self.state.target_queries:
             self.tools["set_target"].run({"queries": target})
             self.log(f"[brain] target → {target}")
+        hint = str(d.get("search_hint") or "").strip().lower()
+        self.state.search_hint = hint if hint in _SEARCH_HINTS else "around"
+        scene = (d.get("scene") or "").strip()
+        if scene and scene != self.state.scene:
+            self.state.scene = scene
+            self.log(f"[brain] scene: {scene}")
         msg = (d.get("message") or "").strip()
         if msg:
             self.state.message = msg
@@ -111,7 +136,7 @@ class AgentBrain:
                 st.lost = 0
                 self.log("[brain] target acquired → approach")
                 return ("hover",)
-            return ("rc", 0, 0, 0, int(config.SPEED * _SCAN_YAW))   # rotate to scan
+            return self._search_step(st)
 
         if st.phase == S.APPROACH:
             if not dets:
@@ -119,6 +144,7 @@ class AgentBrain:
                 if st.lost > _LOST_LIMIT:
                     st.phase = S.SEARCH
                     st.lost = 0
+                    st.reset_search()
                     self.log("[brain] lost target → search")
                 return ("hover",)
             st.lost = 0
@@ -139,3 +165,33 @@ class AgentBrain:
             return ("snapshot", label)
 
         return ("hover",)
+
+    def _search_step(self, st: S.MissionState) -> Action:
+        """Controlled in-room search: sweep a vantage in discrete turns, then
+        reposition to a new vantage (geofence refuses any step that would leave
+        the room). Stops and reports once the room is swept — leaving the room is
+        a future, obstacle-avoidance-gated phase, not done here.
+        """
+        now = time.monotonic()
+        if now < st.search_dwell_until:
+            return ("hover",)                         # hold still so the detector scans this view
+        if st.search_swept_deg < 360:                 # keep turning in place
+            st.search_swept_deg += _SEARCH_YAW_STEP
+            st.search_dwell_until = now + _SEARCH_DWELL_S
+            return ("rotate", _SEARCH_YAW_STEP)
+        if st.search_vantages + 1 >= _SEARCH_MAX_VANTAGES:
+            st.message = "target not found — room swept; hovering"
+            if not st.search_exhausted:               # warn once, not every tick
+                st.search_exhausted = True
+                self.log("[brain] room swept, target not found — hovering. Reposition the "
+                         "drone (manual), change the goal, or land.")
+            return ("hover",)                         # room covered; wait for the operator
+        # follow the VLM's scene-based hint if it named a translation direction,
+        # otherwise cycle through directions so a geofenced one doesn't stall us
+        hint = st.search_hint
+        direction = hint if hint in _SEARCH_DIRS else _SEARCH_DIRS[st.search_vantages % len(_SEARCH_DIRS)]
+        st.search_vantages += 1
+        st.search_swept_deg = 0
+        st.search_dwell_until = now + _SEARCH_DWELL_S
+        self.log(f"[brain] swept, not found → reposition {direction} {_SEARCH_STEP_CM}cm")
+        return ("move", direction, _SEARCH_STEP_CM)

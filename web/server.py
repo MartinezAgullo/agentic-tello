@@ -92,6 +92,7 @@ def _control_loop() -> None:
     threading.Thread(target=_init_perception, args=(c, arb), daemon=True).start()
 
     last_tel = 0.0
+    low_batt_warned = False
     while not _stop.is_set():
         # 1) discrete commands
         while True:
@@ -105,6 +106,8 @@ def _control_loop() -> None:
         if safe.flying:
             try:
                 if _manual_vec != (0, 0, 0, 0):
+                    if arb.mode == ControlArbiter.AUTO:   # the human just grabbed the sticks
+                        log("operator input → MANUAL (AUTO preempted). Re-arm AUTO to resume.")
                     lr, fb, ud, yaw = (v * config.SPEED for v in _manual_vec)
                     arb.manual_rc(lr, fb, ud, yaw)        # nonzero input seizes MANUAL
                 elif arb.mode == ControlArbiter.AUTO:
@@ -137,6 +140,15 @@ def _control_loop() -> None:
             _status.update(ready=True, goal=_goal, mission=mission,
                            **det, **arb.status(), **tel)
 
+            # pre-warn before the auto-land floor (hysteresis so it fires once)
+            batt = tel.get("battery") or 100
+            if not low_batt_warned and batt <= config.BATTERY_FLOOR_PCT + 5:
+                low_batt_warned = True
+                log(f"battery {batt}% — low. Auto-land floor is {config.BATTERY_FLOOR_PCT}%; "
+                    "land soon (manually) to avoid a forced landing.")
+            elif low_batt_warned and batt > config.BATTERY_FLOOR_PCT + 10:
+                low_batt_warned = False
+
         time.sleep(0.05)
 
     try:
@@ -158,6 +170,18 @@ def _handle_cmd(arb: ControlArbiter, c: TelloController, name: str, args: tuple)
         elif name == "mode":
             (arb.arm_auto if args[0] == "AUTO" else arb.to_manual)()
             log(f"Mode → {args[0]}")
+            if args[0] == "AUTO":
+                brain = _sys.get("brain")
+                w = _sys.get("perception")
+                has_goal = brain is not None and brain.active
+                has_target = w is not None and bool(w.queries)
+                if not has_goal and not has_target:
+                    log("AUTO armed but there's no Goal and no Detect target — the drone "
+                        "will just hover. Send a Goal (then it searches/approaches) or type "
+                        "a Detect query (then it servoes toward it).")
+                elif not arb.safe.flying:
+                    log("AUTO armed with a mission but the drone isn't airborne — press "
+                        "Takeoff to start flying it.")
         elif name == "emergency":
             arb.emergency(); log("EMERGENCY STOP")
         elif name == "snapshot":
@@ -207,6 +231,10 @@ def _run_agent(arb: ControlArbiter, c: TelloController, brain: AgentBrain) -> No
     kind = act[0]
     if kind == "rc":
         arb.agent_rc(act[1], act[2], act[3], act[4])
+    elif kind == "rotate":                  # discrete search turn (blocks briefly)
+        arb.agent_rotate(act[1])
+    elif kind == "move":                    # reposition to a new vantage (geofence-guarded)
+        arb.agent_move(act[1], act[2])
     elif kind == "snapshot":
         fn = brain.tools["take_snapshot"].run({"label": act[1]})
         log(f"[brain] snapshot saved: {fn}")
@@ -277,16 +305,19 @@ def video() -> StreamingResponse:
         cv2.putText(placeholder, "waiting for stream...", (120, 180),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (180, 180, 180), 2)
         while not _stop.is_set():
-            frame = render_frame()
-            if frame is None:
-                frame = placeholder
-            if frame.shape[1] > 640:
-                h = int(frame.shape[0] * 640 / frame.shape[1])
-                frame = cv2.resize(frame, (640, h))
-            ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-            if ok:
-                yield (b"--" + boundary.encode() + b"\r\n"
-                       b"Content-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n")
+            try:
+                frame = render_frame()
+                if frame is None:
+                    frame = placeholder
+                if frame.shape[1] > 640:
+                    h = int(frame.shape[0] * 640 / frame.shape[1])
+                    frame = cv2.resize(frame, (640, h))
+                ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                if ok:
+                    yield (b"--" + boundary.encode() + b"\r\n"
+                           b"Content-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n")
+            except Exception as e:                 # one bad frame must not kill the stream
+                print(f"[video] frame error (stream continues): {e}", flush=True)
             time.sleep(0.033)
 
     return StreamingResponse(

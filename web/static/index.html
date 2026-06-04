@@ -71,6 +71,7 @@
         <span class="k">Det fps</span><span class="v" id="detfps">—</span>
         <span class="k">Mission</span><span class="v" id="phase">—</span>
         <span class="k">Target</span><span class="v" id="target">—</span>
+        <span class="k">Scene</span><span class="v" id="scene">—</span>
       </div>
       <div class="btns">
         <button onclick="cmd('takeoff')">Takeoff (T)</button>
@@ -131,6 +132,7 @@ function renderStatus(s) {
   const m = s.mission || {};
   set("phase", m.active ? m.phase : (m.phase === "done" ? "done" : "idle"));
   set("target", m.target || "—");
+  set("scene", m.scene || "—");
   $("battery").style.color = (s.battery <= 20) ? "var(--err)" : "var(--txt)";
   // drone readiness (distinct from the websocket connection)
   if (s.error) { $("conn").textContent = "● " + s.error; $("conn").style.color = "var(--err)"; }

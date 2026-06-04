@@ -138,6 +138,15 @@ class LowLatencyFrameRead:
                     if win_elapsed >= 1.0:
                         self.decode_fps = win_decoded / win_elapsed
                         self.skip_fps = win_skipped / win_elapsed
+                        published = self.decode_fps - self.skip_fps
+                        # The CLAUDE.md's first latency diagnostic: decode/skip/published.
+                        # decode well below the stream rate = consumer-bound = the decode
+                        # thread is being starved of the GIL (see worker). Skip bursts with
+                        # healthy decode are just the anti-backlog drain working, not a fault.
+                        if self.decode_fps < 18:
+                            print(f"[stream] fps decode={self.decode_fps:.0f} "
+                                  f"skip={self.skip_fps:.0f} published={published:.0f} "
+                                  f"— LOW decode: thread starved (GIL?)", flush=True)
                         win_start = now
                         win_decoded = win_skipped = 0
         except Exception as e:

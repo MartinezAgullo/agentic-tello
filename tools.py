@@ -10,8 +10,9 @@ Actuating tools (takeoff/land/move/rotate/emergency) must be invoked from the si
 control thread; planning tools (set_target/report_done/get_*) are thread-safe.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from tello_tools.primitives import get_telemetry as _get_telemetry
 from tello_tools.primitives import take_snapshot as _take_snapshot

@@ -14,10 +14,11 @@ should be fine in-thread).
 
 import threading
 import time
-from typing import Callable
+from collections.abc import Callable
 
 import numpy as np
 
+import config
 from perception.detector import Detector
 
 
@@ -47,6 +48,8 @@ class PerceptionWorker:
     def _run(self) -> None:
         win_start = time.monotonic()
         win_count = 0
+        min_period = 1.0 / config.DETECT_MAX_FPS if config.DETECT_MAX_FPS > 0 else 0.0
+        last_detect = 0.0
         while not self._stopped:
             if self._pending is not None:
                 q, self._pending = self._pending, None
@@ -58,6 +61,14 @@ class PerceptionWorker:
             if frame is None or frame is self._last or not self.detector.queries:
                 time.sleep(0.01)         # nothing new (or nothing to look for) — yield
                 continue
+            # Rate-cap: detector inference holds the GIL; running it flat-out starves the
+            # video decode thread (CLAUDE.md). Sleep out the rest of the period so the
+            # decoder gets its GIL slices. The sleep itself releases the GIL.
+            wait = min_period - (time.monotonic() - last_detect)
+            if wait > 0:
+                time.sleep(wait)
+                continue
+            last_detect = time.monotonic()
             self._last = frame
             try:
                 self.detections = self.detector.detect(frame)

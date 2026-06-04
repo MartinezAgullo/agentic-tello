@@ -8,7 +8,6 @@ them occasionally.
 First use downloads the weights (`config.DETECTOR_MODEL`).
 """
 
-import time
 
 import cv2
 import numpy as np

@@ -14,7 +14,6 @@ env var) as you update the system's brain.
 
 import os
 
-
 # ── video stream ────────────────────────────────────────────────────────────
 TELLO_STREAM_PORT = 11111
 TELLO_STREAM_URL  = f"udp://0.0.0.0:{TELLO_STREAM_PORT}"
@@ -38,15 +37,22 @@ WATCHDOG_S        = 2.0   # no fresh command within this ⇒ auto-hover
 DETECTOR_MODEL   = os.getenv("DETECTOR_MODEL", "yolov8s-worldv2.pt")
 DETECT_CONF      = float(os.getenv("DETECT_CONF", "0.25"))
 DETECT_EVERY     = 1      # run detector every Nth new frame (1 = every new frame)
+# Cap detector rate so its (GIL-holding) inference can't starve the video decode
+# thread. ~15 fps is plenty for servoing and leaves the decoder its GIL slices.
+# Raise once the detector is in its own process (see perception/README.md).
+DETECT_MAX_FPS   = float(os.getenv("DETECT_MAX_FPS", "15"))
 
 # ── brain (VLM via Ollama) ──────────────────────────────────────────────────
 # `ollama list` shows what's pulled; default to the local vision model. Swap via
 # VLM_MODEL/OLLAMA_HOST env vars as newer models land — no code change needed.
 OLLAMA_HOST    = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-VLM_MODEL      = os.getenv("VLM_MODEL", "qwen3-vl:8b")
+VLM_MODEL      = os.getenv("VLM_MODEL", "gemma3:12b")   # non-thinking VLM: low, predictable latency
 VLM_INTERVAL_S = float(os.getenv("VLM_INTERVAL_S", "3.0"))  # min seconds between VLM calls (slow loop)
 VLM_FRAME_W    = int(os.getenv("VLM_FRAME_W", "640"))       # downscale width sent to the VLM
 VLM_KEEP_ALIVE = os.getenv("VLM_KEEP_ALIVE", "-1")          # keep model warm in Ollama (-1 = forever)
+# context window: the model's native default (e.g. 262k) reserves a huge KV cache and
+# makes each call ~15x slower. We only send one image + a short prompt, so cap it small.
+VLM_NUM_CTX    = int(os.getenv("VLM_NUM_CTX", "4096"))
 
 # ── web ui ──────────────────────────────────────────────────────────────────
 WEB_HOST = "0.0.0.0"

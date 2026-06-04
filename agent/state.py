@@ -29,6 +29,16 @@ class MissionState:
             self.message = ""      # latest human-readable status from the brain
             self.done_reason = ""
             self.active = bool(goal)
+            self.search_hint = "around"  # VLM advice on where to explore next (see prompts)
+            self.scene = ""              # VLM's read of the space (doorways/windows/hazards)
+            self.reset_search()
+
+    def reset_search(self) -> None:
+        """Clear the in-room search bookkeeping (call whenever (re)entering SEARCH)."""
+        self.search_swept_deg = 0      # degrees yawed at the current vantage point
+        self.search_vantages = 0       # vantage points visited this search
+        self.search_dwell_until = 0.0  # monotonic time until the detector has scanned a view
+        self.search_exhausted = False  # room fully swept, target not found (warn once)
 
     def snapshot(self) -> dict:
         return {
@@ -37,4 +47,5 @@ class MissionState:
             "phase": self.phase,
             "target": ", ".join(self.target_queries),
             "message": self.message,
+            "scene": self.scene,
         }
