@@ -15,8 +15,28 @@ dependencies = [
     "fastapi>=0.136.3",
     "ftfy>=6.3.1",
     "numpy>=2.4.6",
+    "ollama>=0.6.2",
     "openai>=2.41.0",
     "opencv-python>=4.13.0.92",
     "ultralytics>=8.4.60",
     "uvicorn[standard]>=0.48.0",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.0.0",
+    "ruff>=0.9.0",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+# pycodestyle (E/W), Pyflakes (F), isort (I), pyupgrade (UP), flake8-bugbear (B)
+select = ["E", "W", "F", "I", "UP", "B"]
+ignore = [
+    "E501",  # line length is enforced by the formatter, not the linter
+    "E701",  # multiple statements on one line (colon) — deliberate compact handlers
+    "E702",  # multiple statements on one line (semicolon) — deliberate compact handlers
 ]
