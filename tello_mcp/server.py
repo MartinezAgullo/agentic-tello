@@ -5,6 +5,12 @@ This advertises the project's high-level tools over MCP (stdio) so an external a
 the **same** stack the web UI uses — `TelloController → SafeTello → ControlArbiter` —
 and reuses `build_registry(ctx)` verbatim: no actuation logic is duplicated here.
 
+NOTE: the project's own agent does NOT use this server. `agent/loop.py` calls the tool
+registry directly in-process (e.g. `tools["set_target"].run(...)`); MCP exists only for
+an *external* client crossing a process boundary. Routing the in-process agent through
+MCP would add a serialization round-trip for no benefit and break the fast-loop cadence.
+See tello_mcp/README.md → "Who calls what".
+
 Design rules it honours (see project `CLAUDE.md`):
 
 - **One chokepoint.** djitellopy is not safe for concurrent sends, so *every* actuation
@@ -36,6 +42,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
 from agent.state import MissionState
+from tello_mcp.resources import register_resources
 from tello_tools.arbiter import ArbiterBlocked, ControlArbiter
 from tello_tools.controller import TelloController
 from tello_tools.safety import SafeTello, SafetyError
@@ -169,6 +176,10 @@ def _build_server(arb: ControlArbiter, tools: dict) -> Server:
         except Exception as e:                          # noqa: BLE001
             return [types.TextContent(type="text", text=f"ERROR: {e}")]
 
+    # Read-only context (battery/pose/detections) is exposed idiomatically as MCP
+    # Resources, not just tools — see tello_mcp/resources.py. The get_* tools stay too,
+    # so tool-only clients (e.g. Claude Code) can still read without resource support.
+    register_resources(server, arb, tools, _await_ctl)
     return server
 
 

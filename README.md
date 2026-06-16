@@ -65,7 +65,7 @@ re-arming AUTO is always explicit. Emergency stop bypasses every guard.
 | `perception/` | Open-vocab YOLO-World detector + its worker thread ([README](perception/README.md)) |
 | `brain/` | Ollama VLM client + planning prompts |
 | `agent/` | Dual-cadence sense-plan-act loop, mission state, servoing |
-| `tello_mcp/` | Thin MCP server wrapping the same tool registry |
+| `tello_mcp/` | Thin MCP server wrapping the same tool registry, for **external** clients only — **not used by the in-process agent** ([README](tello_mcp/README.md)) |
 | `web/` | FastAPI dashboard: feed+overlay, decision log, goal box, manual control, E-STOP ([README](web/README.md)) |
 | `tools.py` | The single tool registry (one source of truth for every agent/MCP action) |
 | `config.py` | Every safety cap, cadence, and model name |
