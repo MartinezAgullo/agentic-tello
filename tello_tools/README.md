@@ -40,6 +40,30 @@ Rule of thumb: **agents/UI call `ControlArbiter`**, never `SafeTello` or
 All limits live in the project-root `config.py` (geofence radius, height cap, step
 size, battery floor, watchdog, stream params).
 
+## Tool registry
+
+The single tool registry lives in the project-root `tools.py` (`build_registry(ctx)`).
+Each tool is a JSON-schema-described action bound to a handler that funnels through
+`ControlArbiter` / `primitives`. **Thread** = which thread may invoke it: *Control* tools
+actuate and must run on the single control thread; *Any* tools are thread-safe.
+
+| Tool | Parameters | Does | Type | Thread |
+|------|-----------|------|------|--------|
+| `takeoff` | — | Take off and hover | Actuating | Control |
+| `land` | — | Land safely | Actuating | Control |
+| `move` | `direction` (forward/back/left/right/up/down), `cm` (int) | Discrete step (cm) in one direction; clamped to `[MIN_STEP, MAX_STEP]` and geofenced | Actuating | Control |
+| `rotate` | `deg` (int, negative = counter-clockwise) | Rotate clockwise by degrees | Actuating | Control |
+| `set_target` | `queries` (array of strings) | Set the open-vocab object(s) the detector should localize | Planning | Any |
+| `take_snapshot` | `label` (string) | Save a snapshot of the current camera frame | Actuating | Control |
+| `get_telemetry` | — | Read battery, height, attitude, etc. | Read | Any |
+| `get_observation` | — | Current target, phase and detections | Read | Any |
+| `report_done` | `reason` (string) | Declare the mission goal satisfied | Planning | Any |
+| `emergency_stop` | — | Cut motors immediately (bypasses all guards) | Actuating | Control |
+
+> `move` is **distance-based only** (discrete cm). Continuous velocity control (`rc`)
+> exists in `SafeTello` for servoing and manual sticks but is deliberately **not** a
+> tool — it lives in the fast deterministic loop, never driven per-call by the VLM.
+
 ## Prerequisites
 
 1. Dependencies installed (from the project root):
