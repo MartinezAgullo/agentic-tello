@@ -184,6 +184,14 @@ def _handle_cmd(arb: ControlArbiter, c: TelloController, name: str, args: tuple)
                         "Takeoff to start flying it.")
         elif name == "emergency":
             arb.emergency(); log("EMERGENCY STOP")
+        elif name == "geofence":
+            on = bool(args[0])
+            arb.set_geofence(on)
+            if on:
+                log(f"Geofence RE-ARMED (radius {config.GEOFENCE_RADIUS_CM}cm from takeoff).")
+            else:
+                log("⚠ Geofence DISABLED — the agent may now leave the room / cross doorways. "
+                    "No obstacle avoidance exists; fly low/slow with E-STOP in reach.")
         elif name == "snapshot":
             fn = take_snapshot(c, "manual"); log(f"Snapshot: {fn}")
         elif name == "goal":

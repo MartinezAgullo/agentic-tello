@@ -218,6 +218,13 @@ Tune these to your actual room before flying:
 - Operator input always preempts the agent to MANUAL; re-arming AUTO is explicit.
 - `arbiter.emergency()` cuts motors immediately, bypassing every guard.
 
+> **Geofence toggle is narrow.** The dashboard's *Disable/Re-arm Geofence* button gates only
+> the dead-reckoning radius check on the agent's **discrete `move()` steps** (search-reposition,
+> a `move` maneuver, `return`). It is **not** what allows door-crossing in general: `rc`
+> (continuous velocity) is never geofenced, so **manual WASD flight and the agent's APPROACH
+> servoing can already leave the room** regardless of the toggle. Height/battery/watchdog caps
+> stay enforced even with the geofence off — and there is still **no obstacle avoidance**.
+
 ---
 
 ## Development

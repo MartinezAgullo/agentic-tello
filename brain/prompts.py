@@ -69,41 +69,53 @@ SEARCH_HINTS = ("around", "forward", "back", "left", "right")
 # Splits a natural-language goal into an ordered list of *typed* executable steps the
 # fast loop can run one at a time. A simple goal stays a single "find" step.
 DECOMPOSE_SYSTEM_PROMPT = """\
-You break an indoor drone mission goal into an ordered list of executable steps. The drone
-can do four kinds of step — classify each part of the goal into exactly one "type":
+You break an indoor drone mission goal into an ordered list of executable steps. Read the
+WHOLE goal first — INCLUDING any spatial directions the operator gives ("in front", "to the
+right", "through the door") — then emit steps, in order. There are five step "type"s:
 
-1. "find"   — locate and approach ONE visible object, then photograph it. Field "object": a
-              concrete VISUAL noun phrase ("wooden shelf", "potted plant", "handgun"), NOT a
-              place or abstraction. "approach X", "go to X", "look for X", "take a picture of
-              X" are all "find". Merge a "find X" immediately followed by "approach X" into
-              ONE find step.
-2. "rotate" — turn in place. Fields: "direction" ("left" | "right"), "degrees" (default 90).
-3. "move"   — translate a fixed distance. Fields: "direction" ("forward" | "back" | "left" |
-              "right" | "up" | "down"), "cm" (default 50).
+1. "find"   — locate, approach and photograph ONE object. Field "object": the BARE visual
+              noun only ("potted plant", "wooden shelf", "handgun"). STRIP any location
+              qualifier: "look for a potted plant in the living room" → object "potted plant".
+              "find X", "look for X", "approach X", "go to X", "take a picture of X" are all
+              find. A find step is NEVER unsupported, no matter which room the object is in.
+2. "move"   — translate a fixed distance. Fields: "direction" ("forward"|"back"|"left"|
+              "right"|"up"|"down"), "cm" (estimate; use ~150-250 to cross a doorway or reach
+              the next area, ~50-100 within a room). USE THIS to follow the operator's
+              directions, e.g. to leave a room when they say where the door is.
+3. "rotate" — turn in place. Fields: "direction" ("left"|"right"), "degrees" (default 90).
 4. "return" — fly back to the takeoff / starting point. No fields. "return", "go back",
               "return to initial position", "come back to start" all map here.
+5. "unsupported" — ONLY when the goal needs the drone to leave the room / reach another area
+              but gives NO directions for how to get there (it cannot find a door or avoid
+              obstacles on its own). If directions ARE given, use move/rotate instead — never
+              mark a navigation step unsupported when the operator told you the way.
 
-If a step requires LEAVING the current room — "leave the room", "cross the door", "go to the
-living room", "enter the kitchen", "go to the next room", pass through a doorway, or get past
-an obstacle — you MUST mark it {"type":"unsupported","text":"<the phrase>"}. The drone cannot
-yet navigate between rooms or avoid obstacles.
+Turn navigation phrases into move/rotate steps, e.g.:
+- "leave the room, the door is in front"  → {"type":"move","direction":"forward","cm":200}
+- "...and then to the right" / "X is to the right" → {"type":"move","direction":"right","cm":150}
+- "turn left 90 degrees" → {"type":"rotate","direction":"left","degrees":90}
+
+EXAMPLE
+Goal: "Leave this room and look for a potted plant in the living room (which is at the right
+of this room). The door to leave the room is in front of you and then to the right."
+{"steps": [
+  {"type":"move","direction":"forward","cm":200},
+  {"type":"move","direction":"right","cm":150},
+  {"type":"find","object":"potted plant"}
+]}
 
 Keep the original order. A single-object goal is ONE find step.
-
 Respond with ONLY a JSON object (no prose, no markdown fences):
-{"steps": [
-  {"type":"find","object":"wooden shelf"},
-  {"type":"rotate","direction":"left","degrees":90},
-  {"type":"return"}
-]}
+{"steps": [ {"type":"...", ...}, ... ]}
 """
 
 
 def build_decompose_prompt(goal: str) -> str:
     return (
         f"GOAL: {goal}\n\n"
-        "Break this into an ordered list of typed steps (find / rotate / move / return / "
-        "unsupported). If it is already a single object, return one find step. JSON only."
+        "Break this into an ordered list of typed steps (find / move / rotate / return / "
+        "unsupported). Translate any directions the operator gives into move/rotate steps; "
+        "strip room names from find objects. JSON only."
     )
 
 

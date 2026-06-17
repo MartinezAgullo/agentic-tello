@@ -252,10 +252,18 @@ class AgentBrain:
             self._complete_step()                        # one discrete turn, then next step
             return ("rotate", signed)
         if t == "move":
-            direction, cm = step.get("direction", "forward"), int(step.get("cm", 50))
-            self.log(f"[brain] maneuver: move {direction} {cm}cm")
-            self._complete_step()
-            return ("move", direction, cm)
+            # SafeTello clamps every move to MAX_STEP_CM, so a long move (e.g. crossing a
+            # doorway, cm≈200) must be issued in chunks across ticks until it's covered.
+            direction = step.get("direction", "forward")
+            remaining = int(step.get("_remaining", step.get("cm", config.MAX_STEP_CM)))
+            if remaining < config.MIN_STEP_CM:               # distance covered → next step
+                self._complete_step()
+                return ("hover",)
+            chunk = min(config.MAX_STEP_CM, remaining)
+            step["_remaining"] = remaining - chunk
+            self.log(f"[brain] maneuver: move {direction} {chunk}cm "
+                     f"({step['_remaining']}cm to go)")
+            return ("move", direction, chunk)
         if t == "return":
             return self._return_step(st)
         # unsupported (leave room / cross door / inter-room navigation) — skip with a note

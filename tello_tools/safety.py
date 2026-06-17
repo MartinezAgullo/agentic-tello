@@ -30,6 +30,14 @@ class SafeTello:
         self.x = 0.0
         self.y = 0.0
         self.heading = 0.0
+        # Geofence on by default; an operator can lift it (web UI) and re-arm it.
+        # SCOPE — IMPORTANT: the radius check lives ONLY in `move()` (discrete steps). `rc()`
+        # (continuous velocity) is never geofenced, so BOTH manual WASD flight AND the agent's
+        # APPROACH servoing can already cross a doorway regardless of this flag. The toggle is
+        # therefore narrow: it frees only the agent's discrete `move()`s — search-repositioning
+        # between vantage points, a `move` maneuver step, and `return`. Height/battery/watchdog
+        # caps stay enforced either way.
+        self.geofence_enabled = True
         self._last_cmd = time.monotonic()
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
@@ -59,7 +67,7 @@ class SafeTello:
             return
         cm = self._clamp_step(cm)
         nx, ny = self._predict(direction, cm)
-        if math.hypot(nx, ny) > config.GEOFENCE_RADIUS_CM:
+        if self.geofence_enabled and math.hypot(nx, ny) > config.GEOFENCE_RADIUS_CM:
             raise SafetyError(
                 f"move {direction} {cm}cm would leave geofence "
                 f"(r={math.hypot(nx, ny):.0f} > {config.GEOFENCE_RADIUS_CM}cm)"

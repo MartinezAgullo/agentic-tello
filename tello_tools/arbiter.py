@@ -80,6 +80,11 @@ class ControlArbiter:
         self.mode = self.MANUAL
         self.safe.emergency()
 
+    def set_geofence(self, enabled: bool) -> None:
+        """Operator override: lift/restore the dead-reckoning geofence so the agent may
+        leave the room. Mode-independent (a safety control, like emergency)."""
+        self.safe.geofence_enabled = bool(enabled)
+
     def tick(self) -> None:
         self.safe.tick()
 
@@ -89,6 +94,7 @@ class ControlArbiter:
             "flying": self.safe.flying,
             "pos": (round(self.safe.x), round(self.safe.y)),
             "heading": round(self.safe.heading),
+            "geofence": self.safe.geofence_enabled,
         }
 
     # ── internals ──────────────────────────────────────────────────────────────
