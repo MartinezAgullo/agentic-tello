@@ -29,7 +29,50 @@ The system is split into **two decoupled loops**:
 | **Slow** | every few seconds | VLM (Qwen2.5-VL via Ollama) | turn the goal into detector targets, judge completion — **never actuates** |
 
 The mission advances through a small phase machine — `SEARCH → APPROACH → CAPTURE →
-DONE` — driven by the fast loop, while the VLM only re-plans while hovering.
+DONE` — driven by the fast loop, while the VLM only re-plans while hovering. For a
+**multi-step goal** the VLM first splits it into ordered sub-goals and the phase machine
+runs once per step (see below).
+
+---
+
+## Writing goals
+
+### Any object — not just COCO classes
+
+The detector is **open-vocabulary** (YOLO-World): you can ask for *anything*, not only the
+80 COCO classes. The brain turns your goal into short text queries the detector localizes.
+
+The catch is *how well* it matches: common objects ("chair", "backpack", "potted plant")
+match strongly; rare, abstract, or jargon terms do not, because the detector matches the
+**visual appearance** of a concrete noun phrase — not acronyms or categories. So for complex
+entities, **write a concrete visual noun**, ideally 1–3 words describing what the thing
+*looks like*:
+
+| Instead of… | Write… |
+|-------------|--------|
+| `UGV`, `ground robot` | `small tracked robot`, `small wheeled robot` |
+| `gun` | `handgun`, `rifle` |
+| `drone` | `small quadcopter` |
+| `package` | `cardboard box` |
+
+You can give a couple of phrasings at once (the brain may already do this) so the detector
+gets more than one chance to match. For rare classes, the **larger** detector weights
+generalize better — run with `DETECTOR_MODEL=yolov8x-worldv2.pt`.
+
+### Multi-step goals
+
+Goals can chain several objectives. The brain decomposes the goal into an **ordered list of
+single-target steps** once at mission start, then the fast loop searches → approaches →
+captures each in turn before moving to the next. This is fully general — any goal works, e.g.:
+
+```
+"find a bottle of water and afterwards a potted plant"
+"go to the red box, then the blue box, then the green box"
+"look for a backpack, then find a person"
+```
+
+A single-object goal stays one step and behaves exactly as before. Words like *then*, *after*,
+*next*, *afterwards* mark sequential steps.
 
 ### Layering (one actuation chokepoint)
 

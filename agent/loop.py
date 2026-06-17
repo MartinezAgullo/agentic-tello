@@ -84,9 +84,14 @@ class AgentBrain:
                 time.sleep(0.2)
                 continue
             try:
+                if not self.state.steps:                 # one-time goal decomposition
+                    steps = self.vlm.decompose(self.state.goal)
+                    self.state.set_steps(steps)
+                    if len(steps) > 1:
+                        self.log(f"[brain] goal split into {len(steps)} steps: {steps}")
                 dets = self.worker.detections if self.worker is not None else []
                 decision = self.vlm.plan(
-                    self.state.goal, self.get_frame(), dets,
+                    self.state.current_goal(), self.get_frame(), dets,
                     self.get_telemetry(), self.state.phase,
                 )
                 self._apply(decision)
@@ -117,8 +122,11 @@ class AgentBrain:
         if msg:
             self.state.message = msg
         if d.get("done"):
-            self.tools["report_done"].run({"reason": msg or "goal reached"})
-            self.log(f"[brain] mission complete: {msg}")
+            if self.state.advance_step():            # more sub-goals left → pursue next
+                self.log(f"[brain] step done → next: {self.state.current_goal()!r}")
+            else:
+                self.tools["report_done"].run({"reason": msg or "goal reached"})
+                self.log(f"[brain] mission complete: {msg}")
 
     # ── fast loop: deterministic phase machine (caller actuates) ──────────────────
     def fast_step(self) -> Action:
@@ -160,8 +168,14 @@ class AgentBrain:
             return ("rc", lr, fb, ud, yaw)
 
         if st.phase == S.CAPTURE:
-            st.phase = S.DONE
             label = st.target_queries[0] if st.target_queries else "agent"
+            if st.advance_step():                        # more sub-goals → search for the next
+                self.log(f"[brain] captured → next step: {st.current_goal()!r}")
+            else:
+                st.phase = S.DONE
+                st.active = False
+                st.done_reason = st.done_reason or "all steps complete"
+                self.log("[brain] all steps complete")
             return ("snapshot", label)
 
         return ("hover",)

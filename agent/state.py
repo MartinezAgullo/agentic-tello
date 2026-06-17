@@ -23,6 +23,8 @@ class MissionState:
     def reset(self, goal: str) -> None:
         with self._lock:
             self.goal = goal
+            self.steps: list[str] = []   # ordered sub-goals (decomposed by the VLM once)
+            self.step_idx = 0            # which sub-goal is active
             self.phase = SEARCH
             self.target_queries: list[str] = []
             self.lost = 0          # consecutive fast-ticks the target has been out of view
@@ -32,6 +34,33 @@ class MissionState:
             self.search_hint = "around"  # VLM advice on where to explore next (see prompts)
             self.scene = ""              # VLM's read of the space (doorways/windows/hazards)
             self.reset_search()
+
+    # ── multi-step goal handling ──────────────────────────────────────────────
+    def set_steps(self, steps: list[str]) -> None:
+        """Install the ordered sub-goals (the VLM's one-time decomposition)."""
+        with self._lock:
+            self.steps = [s for s in steps if s.strip()]
+            self.step_idx = 0
+
+    def current_goal(self) -> str:
+        """The sub-goal the planner should pursue right now (whole goal if not split)."""
+        if self.steps and 0 <= self.step_idx < len(self.steps):
+            return self.steps[self.step_idx]
+        return self.goal
+
+    def advance_step(self) -> bool:
+        """Mark the current sub-goal done and move to the next. Returns True if a
+        next step exists (re-armed to SEARCH with a cleared target), False if the
+        whole mission is finished (caller declares DONE)."""
+        with self._lock:
+            if self.step_idx + 1 < len(self.steps):
+                self.step_idx += 1
+                self.phase = SEARCH
+                self.target_queries = []
+                self.lost = 0
+                self.reset_search()
+                return True
+            return False
 
     def reset_search(self) -> None:
         """Clear the in-room search bookkeeping (call whenever (re)entering SEARCH)."""
@@ -45,6 +74,7 @@ class MissionState:
             "active": self.active,
             "goal": self.goal,
             "phase": self.phase,
+            "step": f"{self.step_idx + 1}/{len(self.steps)}" if self.steps else "",
             "target": ", ".join(self.target_queries),
             "message": self.message,
             "scene": self.scene,

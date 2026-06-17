@@ -21,7 +21,12 @@ import numpy as np
 import ollama
 
 import config
-from brain.prompts import SYSTEM_PROMPT, build_user_prompt
+from brain.prompts import (
+    DECOMPOSE_SYSTEM_PROMPT,
+    SYSTEM_PROMPT,
+    build_decompose_prompt,
+    build_user_prompt,
+)
 
 
 def _keep_alive():
@@ -44,6 +49,25 @@ class VLMClient:
             frame = cv2.resize(frame, (w, h))
         ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         return buf.tobytes()
+
+    def decompose(self, goal: str) -> list[str]:
+        """Split a goal into ordered single-target sub-goals (text-only, run once).
+
+        Returns at least one step; falls back to ``[goal]`` if the model returns
+        nothing usable, so a simple mission behaves exactly as before.
+        """
+        resp = self.client.chat(
+            model=self.model,
+            messages=[{"role": "system", "content": DECOMPOSE_SYSTEM_PROMPT},
+                      {"role": "user", "content": build_decompose_prompt(goal)}],
+            format="json",
+            keep_alive=_keep_alive(),
+            options={"temperature": 0.0, "num_ctx": config.VLM_NUM_CTX},
+        )
+        data = _parse_json(resp["message"]["content"] or "")
+        steps = data.get("steps") or []
+        steps = [str(s).strip() for s in steps if str(s).strip()]
+        return steps or [goal]
 
     def plan(self, goal: str, frame: np.ndarray | None, detections: list[dict],
              telemetry: dict, phase: str) -> dict:

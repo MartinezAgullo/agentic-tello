@@ -20,6 +20,17 @@ Translate the natural-language goal into concrete, open-vocabulary object names 
 can localize: short noun phrases like "potted plant", "office chair", "person", "backpack".
 Avoid abstract or relational descriptions.
 
+The detector is OPEN-VOCABULARY — it is NOT limited to common household objects, but it
+matches the visual APPEARANCE of a concrete noun phrase, not jargon, acronyms, or abstract
+terms. Expand those into what the thing physically looks like, and prefer 1-3 word visual
+nouns. Examples:
+- "UGV" / "ground robot"      → "small wheeled robot", "tracked robot vehicle"
+- "gun"                       → "handgun", "rifle"
+- "drone"                     → "small quadcopter"
+- "package" / "parcel"        → "cardboard box"
+If a term is ambiguous, you may list a couple of alternative phrasings in "target" (e.g.
+["handgun", "rifle"]) so the detector has more than one chance to match.
+
 Respond with ONLY a JSON object (no prose, no markdown fences):
 {
   "reasoning": "<one short sentence>",
@@ -35,8 +46,10 @@ Field meaning:
 - "target": the object(s) to detect/approach right now. Keep ONE primary target unless the
   goal clearly needs several. Never empty unless the goal is truly ambiguous.
 - "reached": true if that target is clearly visible, roughly centered, and large/close.
-- "done": true ONLY when the whole goal is satisfied (e.g. the target is reached and a good
-  picture is framable). Otherwise false — keep the target set so the drone keeps searching.
+- "done": true ONLY when the GOAL shown to you is satisfied (e.g. the target is reached and a
+  good picture is framable). The GOAL may be one step of a larger multi-step mission — judge
+  only the step you were given, not any later steps. Otherwise false — keep the target set so
+  the drone keeps searching.
 - "search_hint": when the target is NOT in view, where should the drone explore next? Use a
   direction if the scene suggests one (e.g. an open doorway, a gap, the room continues that
   way); use "around" to just turn and look in place. Default "around" if unsure.
@@ -50,6 +63,34 @@ doors from windows carefully — windows are a hazard.
 
 # directional hints the fast search loop understands; anything else falls back to "around"
 SEARCH_HINTS = ("around", "forward", "back", "left", "right")
+
+
+# ── goal decomposition (run once per mission, text-only — no image) ───────────
+# Splits a natural-language goal into an ordered list of single-target sub-goals so
+# the fast loop can do them one at a time. A simple goal stays a single step.
+DECOMPOSE_SYSTEM_PROMPT = """\
+You break an indoor drone mission goal into an ordered list of simple, single-target steps.
+
+Rules:
+- Each step names exactly ONE object to find / approach / photograph.
+- A goal about a single object is ONE step — do not invent extra steps.
+- Order matters. "Find A and afterwards B" → step for A, then step for B.
+- "then", "after", "next", "and then" mark sequential steps; a plain "and" linking two
+  objects in one action ("a cup and a bottle on the table") may stay a single step if they
+  belong together, but split it if the goal implies visiting them in turn.
+- Phrase each step as a short imperative naming the object, e.g. "find the bottle of water".
+
+Respond with ONLY a JSON object (no prose, no markdown fences):
+{"steps": ["<step 1>", "<step 2>", ...]}
+"""
+
+
+def build_decompose_prompt(goal: str) -> str:
+    return (
+        f"GOAL: {goal}\n\n"
+        "Break this into an ordered list of single-target steps. "
+        "If it is already a single object, return one step. JSON only."
+    )
 
 
 def build_user_prompt(goal: str, detections: list[dict], telemetry: dict, phase: str) -> str:
