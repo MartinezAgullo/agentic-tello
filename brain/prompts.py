@@ -66,30 +66,44 @@ SEARCH_HINTS = ("around", "forward", "back", "left", "right")
 
 
 # ── goal decomposition (run once per mission, text-only — no image) ───────────
-# Splits a natural-language goal into an ordered list of single-target sub-goals so
-# the fast loop can do them one at a time. A simple goal stays a single step.
+# Splits a natural-language goal into an ordered list of *typed* executable steps the
+# fast loop can run one at a time. A simple goal stays a single "find" step.
 DECOMPOSE_SYSTEM_PROMPT = """\
-You break an indoor drone mission goal into an ordered list of simple, single-target steps.
+You break an indoor drone mission goal into an ordered list of executable steps. The drone
+can do four kinds of step — classify each part of the goal into exactly one "type":
 
-Rules:
-- Each step names exactly ONE object to find / approach / photograph.
-- A goal about a single object is ONE step — do not invent extra steps.
-- Order matters. "Find A and afterwards B" → step for A, then step for B.
-- "then", "after", "next", "and then" mark sequential steps; a plain "and" linking two
-  objects in one action ("a cup and a bottle on the table") may stay a single step if they
-  belong together, but split it if the goal implies visiting them in turn.
-- Phrase each step as a short imperative naming the object, e.g. "find the bottle of water".
+1. "find"   — locate and approach ONE visible object, then photograph it. Field "object": a
+              concrete VISUAL noun phrase ("wooden shelf", "potted plant", "handgun"), NOT a
+              place or abstraction. "approach X", "go to X", "look for X", "take a picture of
+              X" are all "find". Merge a "find X" immediately followed by "approach X" into
+              ONE find step.
+2. "rotate" — turn in place. Fields: "direction" ("left" | "right"), "degrees" (default 90).
+3. "move"   — translate a fixed distance. Fields: "direction" ("forward" | "back" | "left" |
+              "right" | "up" | "down"), "cm" (default 50).
+4. "return" — fly back to the takeoff / starting point. No fields. "return", "go back",
+              "return to initial position", "come back to start" all map here.
+
+If a step requires LEAVING the current room — "leave the room", "cross the door", "go to the
+living room", "enter the kitchen", "go to the next room", pass through a doorway, or get past
+an obstacle — you MUST mark it {"type":"unsupported","text":"<the phrase>"}. The drone cannot
+yet navigate between rooms or avoid obstacles.
+
+Keep the original order. A single-object goal is ONE find step.
 
 Respond with ONLY a JSON object (no prose, no markdown fences):
-{"steps": ["<step 1>", "<step 2>", ...]}
+{"steps": [
+  {"type":"find","object":"wooden shelf"},
+  {"type":"rotate","direction":"left","degrees":90},
+  {"type":"return"}
+]}
 """
 
 
 def build_decompose_prompt(goal: str) -> str:
     return (
         f"GOAL: {goal}\n\n"
-        "Break this into an ordered list of single-target steps. "
-        "If it is already a single object, return one step. JSON only."
+        "Break this into an ordered list of typed steps (find / rotate / move / return / "
+        "unsupported). If it is already a single object, return one find step. JSON only."
     )
 
 

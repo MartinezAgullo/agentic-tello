@@ -70,6 +70,10 @@ def build_registry(ctx: ToolContext) -> dict[str, Tool]:
     def get_telemetry(_):
         return _get_telemetry(c)
 
+    def get_pose(_):
+        """Dead-reckoning pose relative to takeoff (cm, heading clockwise deg)."""
+        return {"x": arb.safe.x, "y": arb.safe.y, "heading": arb.safe.heading}
+
     def get_observation(_):
         dets = ctx.worker.detections if ctx.worker is not None else []
         return {"target": st.target_queries, "phase": st.phase, "detections": dets}
@@ -93,6 +97,7 @@ def build_registry(ctx: ToolContext) -> dict[str, Tool]:
         Tool("take_snapshot", "Save a snapshot of the current camera frame.",
              {"label": {"type": "string"}}, take_snapshot),
         Tool("get_telemetry", "Read battery, height, attitude, etc.", {}, get_telemetry),
+        Tool("get_pose", "Dead-reckoning pose (x, y, heading) relative to takeoff.", {}, get_pose),
         Tool("get_observation", "Current target, phase and detections.", {}, get_observation),
         Tool("report_done", "Declare the mission goal satisfied.",
              {"reason": {"type": "string"}}, report_done),

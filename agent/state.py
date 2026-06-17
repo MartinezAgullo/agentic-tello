@@ -23,8 +23,8 @@ class MissionState:
     def reset(self, goal: str) -> None:
         with self._lock:
             self.goal = goal
-            self.steps: list[str] = []   # ordered sub-goals (decomposed by the VLM once)
-            self.step_idx = 0            # which sub-goal is active
+            self.steps: list[dict] = []  # ordered TYPED sub-steps (decomposed by the VLM once)
+            self.step_idx = 0            # which sub-step is active
             self.phase = SEARCH
             self.target_queries: list[str] = []
             self.lost = 0          # consecutive fast-ticks the target has been out of view
@@ -36,17 +36,32 @@ class MissionState:
             self.reset_search()
 
     # ── multi-step goal handling ──────────────────────────────────────────────
-    def set_steps(self, steps: list[str]) -> None:
-        """Install the ordered sub-goals (the VLM's one-time decomposition)."""
+    def set_steps(self, steps: list[dict]) -> None:
+        """Install the ordered typed sub-steps (the VLM's one-time decomposition)."""
+        norm: list[dict] = []
+        for s in steps:
+            if isinstance(s, dict) and s.get("type"):
+                norm.append(s)
+            elif isinstance(s, str) and s.strip():       # tolerate the old string format
+                norm.append({"type": "find", "object": s.strip(), "text": s.strip()})
         with self._lock:
-            self.steps = [s for s in steps if s.strip()]
+            self.steps = norm
             self.step_idx = 0
 
-    def current_goal(self) -> str:
-        """The sub-goal the planner should pursue right now (whole goal if not split)."""
+    def current_step(self) -> dict | None:
+        """The active typed sub-step (None if there are no steps / index out of range)."""
         if self.steps and 0 <= self.step_idx < len(self.steps):
             return self.steps[self.step_idx]
-        return self.goal
+        return None
+
+    def current_goal(self) -> str:
+        """Object phrase for the active find step (used by the VLM planner / logs)."""
+        st = self.current_step()
+        if st is None:
+            return self.goal
+        if st.get("type") == "find":
+            return st.get("object") or st.get("text") or self.goal
+        return st.get("text") or self.goal
 
     def advance_step(self) -> bool:
         """Mark the current sub-goal done and move to the next. Returns True if a

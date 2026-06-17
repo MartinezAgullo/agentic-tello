@@ -50,8 +50,13 @@ class Servoer:
             yaw = self.kp_yaw * ex                     # turn toward the target
         if abs(ey) > self.center_tol:
             ud = -self.kp_ud * ey                      # target high in frame ⇒ climb
-        centered = abs(ex) <= self.center_tol and abs(ey) <= self.center_tol
-        if centered and abs(ea) > self.area_tol:
+        # Approach as soon as we're horizontally (yaw) on target — height-centering (ud)
+        # happens concurrently. Requiring BOTH axes centered before any forward motion made
+        # the approach crawl whenever the box drifted vertically; heading alignment is what
+        # matters for closing distance. `done` still needs full centering + size.
+        h_centered = abs(ex) <= self.center_tol
+        centered = h_centered and abs(ey) <= self.center_tol
+        if h_centered and abs(ea) > self.area_tol:
             fb = self.kp_fwd * (ea / self.target_area_frac)  # +fwd to approach, -back if too close
         done = centered and abs(ea) <= self.area_tol
 

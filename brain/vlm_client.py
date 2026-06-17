@@ -50,11 +50,13 @@ class VLMClient:
         ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         return buf.tobytes()
 
-    def decompose(self, goal: str) -> list[str]:
-        """Split a goal into ordered single-target sub-goals (text-only, run once).
+    def decompose(self, goal: str) -> list[dict]:
+        """Split a goal into ordered, *typed* executable steps (text-only, run once).
 
-        Returns at least one step; falls back to ``[goal]`` if the model returns
-        nothing usable, so a simple mission behaves exactly as before.
+        Each step is a dict with a "type" — find / rotate / move / return / unsupported
+        (see brain.prompts). Always returns at least one step; falls back to a single
+        find step on the whole goal if the model returns nothing usable, so a simple
+        mission behaves exactly as before.
         """
         resp = self.client.chat(
             model=self.model,
@@ -65,9 +67,10 @@ class VLMClient:
             options={"temperature": 0.0, "num_ctx": config.VLM_NUM_CTX},
         )
         data = _parse_json(resp["message"]["content"] or "")
-        steps = data.get("steps") or []
-        steps = [str(s).strip() for s in steps if str(s).strip()]
-        return steps or [goal]
+        raw = data.get("steps") or []
+        steps = [s for s in (_norm_step(s) for s in raw) if s is not None]
+        g = goal.strip()
+        return steps or [{"type": "find", "object": g, "text": g}]
 
     def plan(self, goal: str, frame: np.ndarray | None, detections: list[dict],
              telemetry: dict, phase: str) -> dict:
@@ -101,3 +104,38 @@ def _parse_json(text: str) -> dict:
         if 0 <= i < j:
             return json.loads(text[i:j + 1])
         raise
+
+
+_MOVE_DIRS = ("forward", "back", "left", "right", "up", "down")
+
+
+def _norm_step(s) -> dict | None:
+    """Coerce one model-emitted step into a clean typed dict (or None if unusable)."""
+    if isinstance(s, str):                       # tolerate the old plain-string format
+        s = s.strip()
+        return {"type": "find", "object": s, "text": s} if s else None
+    if not isinstance(s, dict):
+        return None
+    t = str(s.get("type", "find")).strip().lower()
+    text = str(s.get("text") or s.get("object") or "").strip()
+    if t == "rotate":
+        direction = "right" if str(s.get("direction", "left")).lower() == "right" else "left"
+        try:
+            deg = abs(int(s.get("degrees") or s.get("deg") or 90)) or 90
+        except (TypeError, ValueError):
+            deg = 90
+        return {"type": "rotate", "direction": direction, "degrees": deg, "text": text}
+    if t == "move":
+        direction = str(s.get("direction", "forward")).lower()
+        direction = direction if direction in _MOVE_DIRS else "forward"
+        try:
+            cm = int(s.get("cm") or 50)
+        except (TypeError, ValueError):
+            cm = 50
+        return {"type": "move", "direction": direction, "cm": cm, "text": text}
+    if t == "return":
+        return {"type": "return", "text": text or "return to start"}
+    if t == "unsupported":
+        return {"type": "unsupported", "text": text}
+    obj = str(s.get("object") or text).strip()       # default: find
+    return {"type": "find", "object": obj, "text": text or obj} if obj else None
