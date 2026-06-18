@@ -1,8 +1,14 @@
 """Non-actuating primitives: capture a frame to disk, read telemetry.
 
 These only read from the controller, so they need no safety gate.
+
+Every snapshot is written with a sidecar `<stem>.json` carrying the drone's
+telemetry at capture time (height, IMU attitude, battery…). That metadata is
+what lets the BEV / cenital tooling reconstruct an accurate ground projection
+offline — height and pitch come from the drone, not guessed.
 """
 
+import json
 import os
 import time
 
@@ -12,15 +18,30 @@ import config
 from tello_tools.controller import TelloController
 
 
+def snapshot_metadata(controller: TelloController, label: str = "snap") -> dict:
+    """Telemetry to persist alongside a snapshot — the BEV pipeline reads this."""
+    return {
+        "label": label,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "telemetry": get_telemetry(controller),
+        # raw djitellopy state: pitch/roll/yaw (deg), h (cm), tof (cm), baro, ...
+        "state": controller.get_state(),
+    }
+
+
 def take_snapshot(controller: TelloController, label: str = "snap") -> str | None:
     frame = controller.get_frame()
     if frame is None or frame.size == 0:
         return None
     os.makedirs(config.SNAPSHOT_DIR, exist_ok=True)
-    fname = os.path.join(
-        config.SNAPSHOT_DIR, f"{label}_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
-    )
+    stem = os.path.join(config.SNAPSHOT_DIR, f"{label}_{time.strftime('%Y%m%d_%H%M%S')}")
+    fname = f"{stem}.jpg"
     cv2.imwrite(fname, frame)
+    try:
+        with open(f"{stem}.json", "w") as f:
+            json.dump(snapshot_metadata(controller, label), f, indent=2)
+    except Exception:
+        pass  # never let a metadata hiccup lose the image
     return fname
 
 
@@ -31,6 +52,5 @@ def get_telemetry(controller: TelloController) -> dict:
         "height_cm": controller.get_height(),
         "temp_c": state.get("templ"),
         "flight_time_s": state.get("time"),
-        "stream_fps": round(controller.frame_read.decode_fps, 1)
-        if controller.frame_read else 0.0,
+        "stream_fps": round(controller.frame_read.decode_fps, 1) if controller.frame_read else 0.0,
     }

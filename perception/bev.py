@@ -32,15 +32,47 @@ estimation.
 from __future__ import annotations
 
 import argparse
+import json
+import os
 from dataclasses import dataclass
 
 import cv2
 import numpy as np
 
-# DJI RoboMaster TT / Tello still-photo defaults (approximate, uncalibrated).
-DEFAULT_WIDTH = 2592
-DEFAULT_HEIGHT = 1936
-DEFAULT_HFOV_DEG = 82.6
+import config
+
+# DJI RoboMaster TT / Tello still-photo defaults live in config.py (env-overridable).
+DEFAULT_WIDTH = config.CAM_PHOTO_W
+DEFAULT_HEIGHT = config.CAM_PHOTO_H
+DEFAULT_HFOV_DEG = config.CAM_HFOV_DEG
+
+
+def load_snapshot_metadata(image_path: str) -> dict | None:
+    """Read the `<stem>.json` sidecar written next to a drone snapshot, if any.
+
+    Returns the parsed dict, or None when there's no sidecar (e.g. an external
+    image). The drone's height and IMU attitude live under `telemetry`/`state`.
+    """
+    stem, _ = os.path.splitext(image_path)
+    path = f"{stem}.json"
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _height_m_from_meta(meta: dict) -> float | None:
+    """Best ground height (metres) from snapshot metadata. Prefers ToF (downward
+    distance sensor) when present and plausible, else barometric height."""
+    state = meta.get("state") or {}
+    tof = state.get("tof")  # cm, downward time-of-flight
+    if isinstance(tof, (int | float)) and 10 <= tof <= 800:
+        return tof / 100.0
+    h = (meta.get("telemetry") or {}).get("height_cm") or state.get("h")
+    return h / 100.0 if isinstance(h, (int | float)) and h > 0 else None
 
 
 # ── camera model ──────────────────────────────────────────────────────────────
@@ -92,6 +124,19 @@ def vfov_from_hfov(hfov_deg: float, width: int, height: int) -> float:
     """Vertical FOV implied by the horizontal FOV and the aspect ratio, assuming
     square pixels: VFOV = 2*atan(tan(HFOV/2) * H / W)."""
     t = np.tan(np.radians(hfov_deg) / 2.0) * (height / width)
+    return float(np.degrees(2.0 * np.arctan(t)))
+
+
+def hfov_from_dfov(dfov_deg: float, width: int, height: int) -> float:
+    """Horizontal FOV from a *diagonal* FOV spec (square pixels).
+
+    DJI publishes the Tello camera as "FOV 82.6°" without saying horizontal vs
+    diagonal. If it's the diagonal, the real HFOV is narrower:
+        HFOV = 2*atan( (W/d) * tan(DFOV/2) ),  d = sqrt(W^2 + H^2)
+    For the 4:3 still (2592x1936): 82.6° diagonal -> ~70.3° horizontal.
+    """
+    d = float(np.hypot(width, height))
+    t = np.tan(np.radians(dfov_deg) / 2.0) * (width / d)
     return float(np.degrees(2.0 * np.arctan(t)))
 
 
@@ -331,6 +376,29 @@ def draw_metric_grid(bev: np.ndarray, proj: BEVProjector, step_m: float = 1.0) -
     return out
 
 
+def overlay_mask(
+    image: np.ndarray,
+    mask: np.ndarray,
+    color: tuple[int, int, int] = (0, 200, 0),
+    alpha: float = 0.45,
+) -> np.ndarray:
+    """Paint `mask` (255=ground) translucently over `image` for visual inspection.
+
+    This shows *what the geometry assumes is the ground plane* on the real photo —
+    so you can see directly where it overshoots (walls, furniture, columns that
+    fall inside the trapezoid but aren't on z=0).
+    """
+    out = image.copy()
+    sel = mask > 0
+    tint = np.zeros_like(image)
+    tint[:] = color
+    out[sel] = (alpha * tint[sel] + (1 - alpha) * image[sel]).astype(np.uint8)
+    # outline the mask boundary so the extent is crisp
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(out, contours, -1, color, 2)
+    return out
+
+
 # ── CLI demo ────────────────────────────────────────────────────────────────────
 def _resize_to_height(img: np.ndarray, h: int) -> np.ndarray:
     scale = h / img.shape[0]
@@ -340,9 +408,22 @@ def _resize_to_height(img: np.ndarray, h: int) -> np.ndarray:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Single-image BEV / IPM for a Tello frame")
     ap.add_argument("--image", required=True)
-    ap.add_argument("--height", type=float, default=1.5, help="drone height (m)")
+    ap.add_argument(
+        "--height",
+        type=float,
+        default=None,
+        help="drone height (m). Default: read from the snapshot's .json sidecar.",
+    )
     ap.add_argument("--hfov", type=float, default=DEFAULT_HFOV_DEG)
-    ap.add_argument("--vfov", type=float, default=None, help="default: derived from HFOV")
+    ap.add_argument(
+        "--dfov",
+        type=float,
+        default=None,
+        help="diagonal FOV; if set, HFOV is derived from it (Tello's 82.6° may be diagonal)",
+    )
+    ap.add_argument(
+        "--vfov", type=float, default=config.CAM_VFOV_DEG, help="default: derived from HFOV"
+    )
     ap.add_argument("--pitch", type=float, default=0.0, help="nose-down deg (>0)")
     ap.add_argument("--roll", type=float, default=0.0)
     ap.add_argument("--mpp", type=float, default=0.02, help="metres per BEV pixel")
@@ -351,7 +432,13 @@ def main() -> None:
     ap.add_argument(
         "--auto-pitch", action="store_true", help="detect horizon and use it to correct pitch"
     )
-    ap.add_argument("--out", default=None, help="save the panel instead of showing it")
+    ap.add_argument(
+        "--use-meta-attitude",
+        action="store_true",
+        help="also take pitch/roll from the snapshot's IMU metadata (validate signs on a real flight first)",
+    )
+    ap.add_argument("--show", action="store_true", help="also open a preview window")
+    ap.add_argument("--out", default=None, help="override the auto output path")
     args = ap.parse_args()
 
     image = cv2.imread(args.image)
@@ -359,13 +446,33 @@ def main() -> None:
         raise SystemExit(f"could not read {args.image}")
     h_img, w_img = image.shape[:2]
 
-    cam = CameraModel.from_fov(w_img, h_img, args.hfov, args.vfov)
+    hfov = args.hfov if args.dfov is None else hfov_from_dfov(args.dfov, w_img, h_img)
+    if args.dfov is not None:
+        print(f"DFOV {args.dfov:.1f} -> HFOV {hfov:.1f} (assuming diagonal spec)")
+    cam = CameraModel.from_fov(w_img, h_img, hfov, args.vfov)
     print(
         f"camera  {w_img}x{h_img}  fx={cam.fx:.1f} fy={cam.fy:.1f}  "
         f"HFOV={cam.hfov_deg:.1f} VFOV={cam.vfov_deg:.1f}"
     )
 
-    pitch = args.pitch
+    # Height + attitude: CLI flags win; otherwise fall back to the drone metadata.
+    meta = load_snapshot_metadata(args.image)
+    height = args.height
+    pitch, roll = args.pitch, args.roll
+    if meta is not None:
+        if height is None:
+            height = _height_m_from_meta(meta)
+            if height is not None:
+                print(f"height from metadata: {height:.2f} m")
+        if args.use_meta_attitude:
+            st = meta.get("state") or {}
+            pitch = float(st.get("pitch", pitch))
+            roll = float(st.get("roll", roll))
+            print(f"attitude from metadata: pitch={pitch:+.1f} roll={roll:+.1f} deg")
+    if height is None:
+        height = 1.5
+        print(f"no --height and no metadata; assuming {height:.2f} m")
+
     v_h, pitch_err = detect_horizon(image, cam)
     if v_h is not None:
         print(f"horizon row ~ {v_h:.0f}px (cy={cam.cy:.0f}) -> pitch err {pitch_err:+.2f}deg")
@@ -377,12 +484,12 @@ def main() -> None:
 
     proj = BEVProjector(
         cam,
-        args.height,
+        height,
         tuple(args.xrange),
         tuple(args.yrange),
         args.mpp,
         pitch,
-        args.roll,
+        roll,
     )
     bev = draw_metric_grid(proj.warp(image), proj)
     mask = proj.ground_mask()
@@ -395,17 +502,27 @@ def main() -> None:
 
     panel_h = 600
     mask_bgr = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+    mask_on_photo = overlay_mask(image, mask)
     strip = np.hstack(
         [
             _resize_to_height(image, panel_h),
+            _resize_to_height(mask_on_photo, panel_h),
             _resize_to_height(mask_bgr, panel_h),
             _resize_to_height(bev, panel_h),
         ]
     )
-    if args.out:
-        cv2.imwrite(args.out, strip)
-        print(f"wrote {args.out}")
-    else:
+
+    # Auto-save into snapshots/cenital_view/: the BEV alone + the 3-up panel.
+    os.makedirs(config.BEV_DIR, exist_ok=True)
+    stem = os.path.splitext(os.path.basename(args.image))[0]
+    bev_path = args.out or os.path.join(config.BEV_DIR, f"{stem}_bev.jpg")
+    panel_path = os.path.join(config.BEV_DIR, f"{stem}_panel.jpg")
+    cv2.imwrite(bev_path, bev)
+    cv2.imwrite(panel_path, strip)
+    print(f"saved BEV   -> {bev_path}")
+    print(f"saved panel -> {panel_path}")
+
+    if args.show:
         cv2.imshow("original | ground mask | BEV", strip)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
