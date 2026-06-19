@@ -33,6 +33,7 @@ Action = tuple
 
 _LOST_LIMIT = 25         # fast-ticks with no detection before approach → search
 _APPROACH_COAST_S = 0.4  # keep servoing toward the last box through brief detection dropouts
+_WATCH_LEAVE_S = 3.0     # sustained absence (after a subject appeared) that ends a watch step
 
 # ── in-room search pattern (within the geofence; never leaves the room) ───────
 _SEARCH_YAW_STEP = 30        # degrees per discrete turn while sweeping a vantage
@@ -55,6 +56,10 @@ def _step_desc(step: dict | None) -> str:
         return f"move {step.get('direction', 'forward')} {step.get('cm', 50)}cm"
     if t == "return":
         return "return to start"
+    if t == "watch":
+        mode = "follow" if step.get("approach") else "hover"
+        return (f"watch {step.get('object', '')} (every "
+                f"{int(step.get('interval_s', 10))}s, {mode})").strip()
     if t == "unsupported":
         return f"[unsupported] {step.get('text', '')}".strip()
     return t
@@ -170,6 +175,8 @@ class AgentBrain:
         step = st.current_step()
         if step is None:
             return ("hover",)
+        if step.get("type") == "watch":                  # passive vigil + timed snapshots
+            return self._watch_step(st, step)
         if step.get("type", "find") != "find":           # rotate / move / return / unsupported
             return self._maneuver_step(st, step)
 
@@ -241,6 +248,55 @@ class AgentBrain:
         st.done_reason = st.done_reason or "all steps complete"
         self.log("[brain] all steps complete")
         return False
+
+    # ── fast loop: passive vigil with timed snapshots (no VLM needed) ─────────────
+    def _watch_step(self, st: S.MissionState, step: dict) -> Action:
+        """Wait in place for a subject to appear, then snapshot every `interval_s` for
+        as long as it stays in view. The subject noun is explicit in the step, so the
+        detector target is set deterministically — this step works even with Ollama down.
+        With `approach`, the drone keeps the subject framed between shots (servoing);
+        otherwise it holds a fixed hover. The step finishes once the subject, having
+        appeared, stays out of view for `_WATCH_LEAVE_S`.
+        """
+        st.phase = S.WATCH
+        obj = (step.get("object") or "person").strip()
+        interval = float(step.get("interval_s", 10) or 10)
+        approach = bool(step.get("approach", False))
+        # Lock the detector onto the subject (no VLM round-trip — the noun is known).
+        if st.target_queries != [obj]:
+            self.tools["set_target"].run({"queries": [obj]})
+            st.target_queries = [obj]
+            self.log(f"[brain] watch → {obj} (snapshot every {interval:.0f}s, "
+                     f"{'follow' if approach else 'hover'}); waiting for it to appear")
+
+        dets = self.worker.detections if self.worker is not None else []
+        now = time.monotonic()
+
+        if not dets:
+            if st.watch_seen:                            # it appeared earlier — has it left?
+                if st.watch_lost_since == 0.0:
+                    st.watch_lost_since = now
+                elif now - st.watch_lost_since >= _WATCH_LEAVE_S:
+                    self.log(f"[brain] {obj} left the view → watch step done")
+                    self._complete_step()
+            return ("hover",)                            # still waiting / brief dropout
+
+        st.watch_lost_since = 0.0                         # present this tick
+        if not st.watch_seen:
+            st.watch_seen = True
+            st.watch_next_snap = now                      # shoot immediately on first appearance
+            self.log(f"[brain] {obj} appeared → snapshotting every {interval:.0f}s")
+
+        if now >= st.watch_next_snap:
+            st.watch_next_snap = now + interval           # hold still on the shot tick
+            return ("snapshot", obj)
+        if approach:                                      # keep it framed between shots
+            frame = self.get_frame()
+            if frame is not None:
+                h, w = frame.shape[:2]
+                lr, fb, ud, yaw, _ = self.servoer.step(dets[0], w, h)
+                return ("rc", lr, fb, ud, yaw)
+        return ("hover",)
 
     # ── fast loop: deterministic maneuver steps (no VLM, no detector) ─────────────
     def _maneuver_step(self, st: S.MissionState, step: dict) -> Action:

@@ -12,6 +12,7 @@ import threading
 SEARCH = "search"      # target named but not yet in view → scan
 APPROACH = "approach"  # target visible → center + close in (deterministic servoing)
 CAPTURE = "capture"    # centered & close → grab a snapshot
+WATCH = "watch"        # passive vigil → wait for a subject, then snapshot on a timer
 DONE = "done"          # goal satisfied → hover, wait for the operator
 
 
@@ -34,6 +35,7 @@ class MissionState:
             self.search_hint = "around"  # VLM advice on where to explore next (see prompts)
             self.scene = ""              # VLM's read of the space (doorways/windows/hazards)
             self.reset_search()
+            self.reset_watch()
 
     # ── multi-step goal handling ──────────────────────────────────────────────
     def set_steps(self, steps: list[dict]) -> None:
@@ -74,6 +76,7 @@ class MissionState:
                 self.target_queries = []
                 self.lost = 0
                 self.reset_search()
+                self.reset_watch()
                 return True
             return False
 
@@ -83,6 +86,12 @@ class MissionState:
         self.search_vantages = 0       # vantage points visited this search
         self.search_dwell_until = 0.0  # monotonic time until the detector has scanned a view
         self.search_exhausted = False  # room fully swept, target not found (warn once)
+
+    def reset_watch(self) -> None:
+        """Clear the in-place vigil bookkeeping (call whenever (re)entering a watch step)."""
+        self.watch_seen = False        # subject has appeared at least once this step
+        self.watch_next_snap = 0.0     # monotonic time the next snapshot is due
+        self.watch_lost_since = 0.0    # monotonic time the subject (after appearing) went absent
 
     def snapshot(self) -> dict:
         return {

@@ -71,7 +71,7 @@ SEARCH_HINTS = ("around", "forward", "back", "left", "right")
 DECOMPOSE_SYSTEM_PROMPT = """\
 You break an indoor drone mission goal into an ordered list of executable steps. Read the
 WHOLE goal first — INCLUDING any spatial directions the operator gives ("in front", "to the
-right", "through the door") — then emit steps, in order. There are five step "type"s:
+right", "through the door") — then emit steps, in order. There are six step "type"s:
 
 1. "find"   — locate, approach and photograph ONE object. Field "object": the BARE visual
               noun only ("potted plant", "wooden shelf", "handgun"). STRIP any location
@@ -85,7 +85,15 @@ right", "through the door") — then emit steps, in order. There are five step "
 3. "rotate" — turn in place. Fields: "direction" ("left"|"right"), "degrees" (default 90).
 4. "return" — fly back to the takeoff / starting point. No fields. "return", "go back",
               "return to initial position", "come back to start" all map here.
-5. "unsupported" — ONLY when the goal needs the drone to leave the room / reach another area
+5. "watch"  — wait in place for a subject to APPEAR, then take repeated snapshots while it
+              stays in view. Use this for "wait until X appears", "when X shows up take a
+              picture", "monitor for X", "every N seconds photograph X". Fields: "object"
+              (the BARE visual noun, e.g. "person"), "interval_s" (seconds between snapshots;
+              default 10), and "approach" (false = hold a fixed hover and just watch — the
+              default for "wait"/"espera"; true = keep the subject framed/followed between
+              shots). Unlike "find", watch does NOT fly toward the subject and does NOT end
+              after one photo — it keeps shooting until the subject leaves.
+6. "unsupported" — ONLY when the goal needs the drone to leave the room / reach another area
               but gives NO directions for how to get there (it cannot find a door or avoid
               obstacles on its own). If directions ARE given, use move/rotate instead — never
               mark a navigation step unsupported when the operator told you the way.
@@ -104,6 +112,12 @@ of this room). The door to leave the room is in front of you and then to the rig
   {"type":"find","object":"potted plant"}
 ]}
 
+EXAMPLE
+Goal: "Wait until a person appears and when they appear take a snapshot every 10 seconds."
+{"steps": [
+  {"type":"watch","object":"person","interval_s":10,"approach":false}
+]}
+
 Keep the original order. A single-object goal is ONE find step.
 Respond with ONLY a JSON object (no prose, no markdown fences):
 {"steps": [ {"type":"...", ...}, ... ]}
@@ -114,7 +128,8 @@ def build_decompose_prompt(goal: str) -> str:
     return (
         f"GOAL: {goal}\n\n"
         "Break this into an ordered list of typed steps (find / move / rotate / return / "
-        "unsupported). Translate any directions the operator gives into move/rotate steps; "
+        "watch / unsupported). Translate any directions the operator gives into move/rotate "
+        "steps; use watch for 'wait until X appears' / 'snapshot every N seconds'; "
         "strip room names from find objects. JSON only."
     )
 

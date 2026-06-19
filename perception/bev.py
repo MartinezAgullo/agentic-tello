@@ -376,6 +376,56 @@ def draw_metric_grid(bev: np.ndarray, proj: BEVProjector, step_m: float = 1.0) -
     return out
 
 
+def floor_mask_appearance(
+    image: np.ndarray,
+    geom_mask: np.ndarray,
+    k: float = 3.0,
+) -> np.ndarray:
+    """Refine the geometric ground mask into a *real* floor mask — geometry ∩ appearance.
+
+    Classic CV, no NN. The geometric trapezoid says "where the floor *could* be";
+    this carves it down to "where the floor *actually* is" by appearance:
+
+      1. Seed = the bottom band of the geometric mask (closest ground, surely floor).
+      2. Build a robust colour model (median + MAD) from the seed in CIELAB, with
+         chroma (a,b) weighted over lightness L (indoor lighting varies a lot).
+      3. Keep trapezoid pixels within `k` robust-std of the model.
+      4. Morphological clean, then keep only the component(s) connected to the seed —
+         so a same-colour sofa that isn't touching the floor region is dropped.
+
+    Note: a richly patterned rug has high colour variance, so this is inherently
+    fragile (brown parquet vs a brown sofa base can be confused). Connectivity to
+    the seed is what keeps it sane.
+    """
+    geom = geom_mask > 0
+    if geom.sum() < 100:
+        return geom_mask.copy()
+
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
+    h = image.shape[0]
+    seed = np.zeros_like(geom)
+    seed[int(h * 0.80) :, :] = geom[int(h * 0.80) :, :]
+    if seed.sum() < 50:
+        seed = geom  # fallback: whole trapezoid as seed
+
+    samp = lab[seed]
+    med = np.median(samp, axis=0)
+    scale = 1.4826 * np.median(np.abs(samp - med), axis=0) + 1e-3  # robust std
+    chan_w = np.array([0.5, 1.0, 1.0])  # down-weight L vs a,b
+    dist = np.sqrt(((((lab - med) / scale) ** 2) * chan_w).sum(axis=2))
+    cand = (geom & (dist < k)).astype(np.uint8) * 255
+
+    kern = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    cand = cv2.morphologyEx(cand, cv2.MORPH_CLOSE, kern)
+    cand = cv2.morphologyEx(cand, cv2.MORPH_OPEN, kern)
+
+    n, lbl = cv2.connectedComponents((cand > 0).astype(np.uint8))
+    keep = set(np.unique(lbl[seed & (cand > 0)])) - {0}
+    if not keep:
+        return cand
+    return (np.isin(lbl, list(keep)).astype(np.uint8)) * 255
+
+
 def overlay_mask(
     image: np.ndarray,
     mask: np.ndarray,
@@ -403,6 +453,111 @@ def overlay_mask(
 def _resize_to_height(img: np.ndarray, h: int) -> np.ndarray:
     scale = h / img.shape[0]
     return cv2.resize(img, (int(img.shape[1] * scale), h))
+
+
+def generate_bev_panel(
+    image_path: str,
+    *,
+    height: float | None = None,
+    hfov: float = DEFAULT_HFOV_DEG,
+    dfov: float | None = None,
+    vfov: float | None = None,
+    pitch: float = 0.0,
+    roll: float = 0.0,
+    mpp: float = 0.02,
+    xrange: tuple[float, float] = (-3.0, 3.0),
+    yrange: tuple[float, float] = (0.5, 8.0),
+    auto_pitch: bool = False,
+    use_meta_attitude: bool = False,
+    floor_seg: bool = False,
+    floor_k: float = 3.0,
+    out: str | None = None,
+    save: bool = True,
+) -> dict:
+    """Build the 3-up cenital panel (original | floor mask | BEV) from one image.
+
+    Shared by the CLI and the web dashboard. Reads drone height/attitude from the
+    snapshot's `.json` sidecar unless overridden. Returns a dict with the rendered
+    `panel`/`bev` arrays, the saved paths (when `save`), and a `summary` of
+    human-readable log lines.
+    """
+    if vfov is None:
+        vfov = config.CAM_VFOV_DEG
+    image = cv2.imread(image_path)
+    if image is None:
+        raise FileNotFoundError(f"could not read {image_path}")
+    h_img, w_img = image.shape[:2]
+    summary: list[str] = []
+
+    if dfov is not None:
+        hfov = hfov_from_dfov(dfov, w_img, h_img)
+        summary.append(f"DFOV {dfov:.1f} -> HFOV {hfov:.1f} (assuming diagonal spec)")
+    cam = CameraModel.from_fov(w_img, h_img, hfov, vfov)
+    summary.append(
+        f"camera {w_img}x{h_img} fx={cam.fx:.1f} fy={cam.fy:.1f} "
+        f"HFOV={cam.hfov_deg:.1f} VFOV={cam.vfov_deg:.1f}"
+    )
+
+    # Height + attitude: explicit args win; otherwise fall back to drone metadata.
+    meta = load_snapshot_metadata(image_path)
+    if meta is not None:
+        if height is None:
+            height = _height_m_from_meta(meta)
+            if height is not None:
+                summary.append(f"height from metadata: {height:.2f} m")
+        if use_meta_attitude:
+            st = meta.get("state") or {}
+            pitch = float(st.get("pitch", pitch))
+            roll = float(st.get("roll", roll))
+            summary.append(f"attitude from metadata: pitch={pitch:+.1f} roll={roll:+.1f} deg")
+    if height is None:
+        height = 1.5
+        summary.append(f"no height and no metadata; assuming {height:.2f} m")
+
+    if auto_pitch:
+        v_h, pitch_err = detect_horizon(image, cam)
+        if v_h is not None:
+            pitch = pitch_err
+            summary.append(f"horizon row ~{v_h:.0f}px -> using detected pitch {pitch:+.2f}deg")
+
+    proj = BEVProjector(cam, height, xrange, yrange, mpp, pitch, roll)
+    geom_mask = proj.ground_mask()
+    if floor_seg:
+        mask = floor_mask_appearance(image, geom_mask, floor_k)
+        bev_src = cv2.bitwise_and(image, image, mask=mask)  # drop non-floor before warp
+    else:
+        mask = geom_mask
+        bev_src = image
+    bev = draw_metric_grid(proj.warp(bev_src), proj)
+
+    panel_h = 600
+    strip = np.hstack(
+        [
+            _resize_to_height(image, panel_h),
+            _resize_to_height(overlay_mask(image, mask), panel_h),
+            _resize_to_height(bev, panel_h),
+        ]
+    )
+
+    bev_path = panel_path = None
+    if save:
+        os.makedirs(config.BEV_DIR, exist_ok=True)
+        stem = os.path.splitext(os.path.basename(image_path))[0]
+        bev_path = out or os.path.join(config.BEV_DIR, f"{stem}_bev.jpg")
+        panel_path = os.path.join(config.BEV_DIR, f"{stem}_panel.jpg")
+        cv2.imwrite(bev_path, bev)
+        cv2.imwrite(panel_path, strip)
+        summary.append(f"saved panel -> {panel_path}")
+
+    return {
+        "panel": strip,
+        "bev": bev,
+        "mask": mask,
+        "height": height,
+        "panel_path": panel_path,
+        "bev_path": bev_path,
+        "summary": summary,
+    }
 
 
 def main() -> None:
@@ -437,93 +592,40 @@ def main() -> None:
         action="store_true",
         help="also take pitch/roll from the snapshot's IMU metadata (validate signs on a real flight first)",
     )
+    ap.add_argument(
+        "--floor-seg",
+        action="store_true",
+        help="refine the geometric mask into a real floor mask (geometry ∩ appearance)",
+    )
+    ap.add_argument(
+        "--floor-k", type=float, default=3.0, help="floor colour tolerance (robust std)"
+    )
     ap.add_argument("--show", action="store_true", help="also open a preview window")
     ap.add_argument("--out", default=None, help="override the auto output path")
     args = ap.parse_args()
 
-    image = cv2.imread(args.image)
-    if image is None:
-        raise SystemExit(f"could not read {args.image}")
-    h_img, w_img = image.shape[:2]
-
-    hfov = args.hfov if args.dfov is None else hfov_from_dfov(args.dfov, w_img, h_img)
-    if args.dfov is not None:
-        print(f"DFOV {args.dfov:.1f} -> HFOV {hfov:.1f} (assuming diagonal spec)")
-    cam = CameraModel.from_fov(w_img, h_img, hfov, args.vfov)
-    print(
-        f"camera  {w_img}x{h_img}  fx={cam.fx:.1f} fy={cam.fy:.1f}  "
-        f"HFOV={cam.hfov_deg:.1f} VFOV={cam.vfov_deg:.1f}"
+    res = generate_bev_panel(
+        args.image,
+        height=args.height,
+        hfov=args.hfov,
+        dfov=args.dfov,
+        vfov=args.vfov,
+        pitch=args.pitch,
+        roll=args.roll,
+        mpp=args.mpp,
+        xrange=tuple(args.xrange),
+        yrange=tuple(args.yrange),
+        auto_pitch=args.auto_pitch,
+        use_meta_attitude=args.use_meta_attitude,
+        floor_seg=args.floor_seg,
+        floor_k=args.floor_k,
+        out=args.out,
     )
-
-    # Height + attitude: CLI flags win; otherwise fall back to the drone metadata.
-    meta = load_snapshot_metadata(args.image)
-    height = args.height
-    pitch, roll = args.pitch, args.roll
-    if meta is not None:
-        if height is None:
-            height = _height_m_from_meta(meta)
-            if height is not None:
-                print(f"height from metadata: {height:.2f} m")
-        if args.use_meta_attitude:
-            st = meta.get("state") or {}
-            pitch = float(st.get("pitch", pitch))
-            roll = float(st.get("roll", roll))
-            print(f"attitude from metadata: pitch={pitch:+.1f} roll={roll:+.1f} deg")
-    if height is None:
-        height = 1.5
-        print(f"no --height and no metadata; assuming {height:.2f} m")
-
-    v_h, pitch_err = detect_horizon(image, cam)
-    if v_h is not None:
-        print(f"horizon row ~ {v_h:.0f}px (cy={cam.cy:.0f}) -> pitch err {pitch_err:+.2f}deg")
-        if args.auto_pitch:
-            pitch = pitch_err
-            print(f"using detected pitch = {pitch:+.2f}deg")
-    else:
-        print("horizon: not detected")
-
-    proj = BEVProjector(
-        cam,
-        height,
-        tuple(args.xrange),
-        tuple(args.yrange),
-        args.mpp,
-        pitch,
-        roll,
-    )
-    bev = draw_metric_grid(proj.warp(image), proj)
-    mask = proj.ground_mask()
-
-    cmp = compare_methods(proj, image)
-    print(
-        f"analytic vs warpPerspective: mean|diff|={cmp['mean_abs_diff']:.3f} "
-        f"max={cmp['max_abs_diff']:.1f} (≈0 confirms IPM is a homography)"
-    )
-
-    panel_h = 600
-    mask_bgr = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-    mask_on_photo = overlay_mask(image, mask)
-    strip = np.hstack(
-        [
-            _resize_to_height(image, panel_h),
-            _resize_to_height(mask_on_photo, panel_h),
-            _resize_to_height(mask_bgr, panel_h),
-            _resize_to_height(bev, panel_h),
-        ]
-    )
-
-    # Auto-save into snapshots/cenital_view/: the BEV alone + the 3-up panel.
-    os.makedirs(config.BEV_DIR, exist_ok=True)
-    stem = os.path.splitext(os.path.basename(args.image))[0]
-    bev_path = args.out or os.path.join(config.BEV_DIR, f"{stem}_bev.jpg")
-    panel_path = os.path.join(config.BEV_DIR, f"{stem}_panel.jpg")
-    cv2.imwrite(bev_path, bev)
-    cv2.imwrite(panel_path, strip)
-    print(f"saved BEV   -> {bev_path}")
-    print(f"saved panel -> {panel_path}")
+    for line in res["summary"]:
+        print(line)
 
     if args.show:
-        cv2.imshow("original | ground mask | BEV", strip)
+        cv2.imshow("original | ground mask | BEV", res["panel"])
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 

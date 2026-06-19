@@ -16,6 +16,7 @@ Phase B lands. The AUTO mode is a no-op until the Phase E agent loop drives it.
 import asyncio
 import collections
 import errno
+import os
 import queue
 import threading
 import time
@@ -23,8 +24,8 @@ from contextlib import asynccontextmanager
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 import config
@@ -32,6 +33,7 @@ from agent.loop import AgentBrain
 from agent.servoing import Servoer
 from agent.state import MissionState
 from brain.vlm_client import VLMClient
+from perception.bev import generate_bev_panel
 from perception.detector import COCO_CLASSES, Detector
 from perception.worker import PerceptionWorker
 from tello_tools.arbiter import ArbiterBlocked, ControlArbiter
@@ -194,6 +196,16 @@ def _handle_cmd(arb: ControlArbiter, c: TelloController, name: str, args: tuple)
                     "No obstacle avoidance exists; fly low/slow with E-STOP in reach.")
         elif name == "snapshot":
             fn = take_snapshot(c, "manual"); log(f"Snapshot: {fn}")
+        elif name == "cenital":
+            fn = take_snapshot(c, "cenital")
+            if fn is None:
+                log("Cenital: no frame yet — is the stream up?")
+            else:
+                floor = bool(args[0]) if args else False
+                log(f"Cenital: snapshot {fn} — generating BEV (floor-seg={floor})…")
+                # BEV is CPU work (warp + seg); run off the control thread so it
+                # never starves flight. It only reads the saved file, no drone I/O.
+                threading.Thread(target=_make_cenital, args=(fn, floor), daemon=True).start()
         elif name == "goal":
             global _goal
             _goal = args[0]
@@ -206,6 +218,16 @@ def _handle_cmd(arb: ControlArbiter, c: TelloController, name: str, args: tuple)
         log(f"refused: {e}")
     except Exception as e:
         log(f"command error: {e}")
+
+
+def _make_cenital(image_path: str, floor_seg: bool) -> None:
+    """Render the cenital BEV panel off-thread; publish its path for the UI."""
+    try:
+        res = generate_bev_panel(image_path, floor_seg=floor_seg)
+        _status["cenital"] = {"path": res["panel_path"], "ts": int(time.time() * 1000)}
+        log(f"[cenital] H={res['height']:.2f}m → {os.path.basename(res['panel_path'])}")
+    except Exception as e:
+        log(f"Cenital failed: {e}")
 
 
 def _init_perception(c: TelloController, arb: ControlArbiter) -> None:
@@ -331,6 +353,16 @@ def video() -> StreamingResponse:
     return StreamingResponse(
         gen(), media_type=f"multipart/x-mixed-replace; boundary={boundary}"
     )
+
+
+@app.get("/cenital/panel")
+def cenital_panel() -> Response:
+    """Serve the most recently generated cenital panel image (304/404 until one exists)."""
+    cv = _status.get("cenital") or {}
+    path = cv.get("path")
+    if not path or not os.path.exists(path):
+        return Response(status_code=404)
+    return FileResponse(path)
 
 
 @app.websocket("/ws")

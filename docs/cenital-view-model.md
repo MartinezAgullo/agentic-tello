@@ -217,7 +217,41 @@ numéricamente en `compare_methods`.
 
 ---
 
-## 8. Referencias
+## 8. La máscara de suelo (`ground_mask`)
+
+La máscara marca, sobre la imagen **original**, qué píxeles son "suelo
+aprovechable" para la BEV. Punto clave: **no mira el contenido de la imagen**
+(ni color, ni textura, ni detección) — la define **pura geometría** a partir de
+la pose supuesta (`H`, `pitch`, `roll`) y de `K`. Para cada píxel se pregunta *"¿a
+dónde va su rayo y dónde aterriza?"* (vía `pixels_to_ground`), y entra en la
+máscara si cumple **dos condiciones**:
+
+1. **El rayo baja por debajo del horizonte.** La dirección del rayo tiene una
+   componente vertical `d_z`. Si `d_z < 0` el rayo desciende y cruza el suelo
+   `Z = 0` a distancia `t = −H / d_z > 0` (suelo candidato); si `d_z ≥ 0` apunta
+   al horizonte o al cielo y **nunca toca el suelo** (`valid = False`). El
+   **horizonte es exactamente `d_z = 0`** — con pitch=0 cae en la fila central
+   (`v = cy`): todo lo de abajo es suelo geométrico, lo de arriba no.
+2. **El impacto cae dentro de la ventana métrica de la BEV.** El punto `(X, Y)`
+   donde el rayo toca el suelo debe estar en el rectángulo cubierto por la BEV:
+
+   ```
+   in_range = valid
+              & x_range[0] ≤ X ≤ x_range[1]
+              & y_range[0] ≤ Y ≤ y_range[1]
+   ```
+
+El resultado es una máscara `uint8` del tamaño de la imagen (`255` = suelo útil).
+En la demo CLI se muestra como el panel central de `original | ground mask | BEV`.
+
+> Igual que en el resto del módulo, "suelo" es **geométrico, no semántico**: una
+> pared u obstáculo vertical dentro del rango también se marca como suelo, porque
+> asumimos mundo plano. Distinguir suelo real de un obstáculo requeriría
+> profundidad o detección, que aquí no hay.
+
+---
+
+## 9. Referencias
 
 1. Richard Hartley, Andrew Zisserman.
    *Multiple View Geometry in Computer Vision*.

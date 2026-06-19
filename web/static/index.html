@@ -38,6 +38,13 @@
   .help { color:var(--dim); font-size:12px; margin-top:10px; }
   .help b { color:var(--txt); }
   h3 { margin:0 0 6px; font-size:13px; color:var(--dim); text-transform:uppercase; letter-spacing:.5px; }
+  nav.tabs { display:flex; gap:6px; margin-left:auto; }
+  nav.tabs button { background:transparent; border:1px solid transparent; color:var(--dim);
+                    padding:6px 14px; border-radius:6px; }
+  nav.tabs button.active { background:var(--panel); border-color:var(--line); color:var(--txt); }
+  #cenital-img { width:100%; border-radius:6px; background:#000; display:block; margin-top:12px;
+                 min-height:200px; }
+  .ckbx { display:flex; align-items:center; gap:8px; color:var(--dim); margin-top:10px; }
 </style>
 </head>
 <body>
@@ -45,15 +52,19 @@
   <h1>Agentic Tello</h1>
   <span id="mode" class="MANUAL">MANUAL</span>
   <span id="conn" style="color:var(--err)">● disconnected</span>
+  <nav class="tabs">
+    <button id="tab-control" class="active" onclick="switchTab('control')">Control</button>
+    <button id="tab-cenital" onclick="switchTab('cenital')">Cenital view</button>
+  </nav>
 </header>
 
-<main>
+<main id="view-control">
   <section class="panel">
     <img id="video" src="/video" alt="live feed">
     <div class="help">
       Click the video first (to capture keys). Control pauses while you type in the goal/detect boxes.
       <b>W/S</b> fwd/back · <b>A/D</b> strafe · <b>↑/↓</b> up/down · <b>←/→</b> yaw ·
-      <b>T</b> takeoff · <b>L</b> land · <b>Esc</b> emergency
+      <b>T</b> takeoff · <b>L</b> land · <b>P</b> snapshot · <b>Esc</b> emergency
     </div>
   </section>
 
@@ -102,6 +113,23 @@
   </section>
 </main>
 
+<div id="view-cenital" style="display:none; padding:14px">
+  <div class="panel">
+    <h3>Cenital view — bird's-eye-view from a single frame</h3>
+    <div class="btns">
+      <button id="cenital-btn" onclick="generateCenital()">📸 Snapshot → cenital view</button>
+    </div>
+    <label class="ckbx">
+      <input type="checkbox" id="cenital-floor"> floor segmentation (geometry ∩ appearance)
+    </label>
+    <div class="help">
+      Takes a snapshot (with drone height from telemetry) and projects the ground plane
+      to a metric top-down view. Panel: <b>original · floor mask · BEV</b>.
+    </div>
+    <img id="cenital-img" alt="no cenital view yet — press the button">
+  </div>
+</div>
+
 <script>
 let ws, mode = "MANUAL";
 const $ = id => document.getElementById(id);
@@ -144,6 +172,7 @@ function renderStatus(s) {
     b.textContent = s.geofence ? "Disable Geofence" : "● Re-arm Geofence";
     b.style.borderColor = s.geofence ? "var(--line)" : "var(--err)";
   }
+  if (s.cenital) refreshCenital(s.cenital);
   $("battery").style.color = (s.battery <= 20) ? "var(--err)" : "var(--txt)";
   // drone readiness (distinct from the websocket connection)
   if (s.error) { $("conn").textContent = "● " + s.error; $("conn").style.color = "var(--err)"; }
@@ -170,6 +199,26 @@ function sendGoal() { const t = $("goalbox").value.trim(); if (t) send({type:"go
 function sendQueries() { send({type:"queries", text: $("detectbox").value.trim()}); }
 function sendQueriesAll() { send({type:"queries_all"}); }
 
+// ── tabs + cenital view ─────────────────────────────────────────────────────
+function switchTab(name) {
+  $("view-control").style.display  = (name === "control") ? "" : "none";
+  $("view-cenital").style.display  = (name === "cenital") ? "block" : "none";
+  $("tab-control").classList.toggle("active", name === "control");
+  $("tab-cenital").classList.toggle("active", name === "cenital");
+}
+function generateCenital() {
+  const floor = $("cenital-floor").checked;
+  send({type:"cmd", name:"cenital", args:[floor]});
+  $("cenital-btn").textContent = "⏳ generating…";
+}
+let cenitalTs = 0;
+function refreshCenital(cv) {
+  if (!cv || !cv.ts || cv.ts === cenitalTs) return;
+  cenitalTs = cv.ts;
+  $("cenital-img").src = "/cenital/panel?ts=" + cv.ts;   // cache-bust
+  $("cenital-btn").textContent = "📸 Snapshot → cenital view";
+}
+
 // ── keyboard → manual stick vector ─────────────────────────────────────────
 const keys = new Set();
 let lastVec = "";
@@ -195,6 +244,7 @@ addEventListener("keydown", e => {
   if (typing(e)) return;                         // typing a goal/query: ignore control keys
   if (k === "t") { cmd("takeoff"); return; }
   if (k === "l") { cmd("land"); return; }
+  if (k === "p") { cmd("snapshot"); return; }    // P → snapshot (with metadata sidecar)
   if (MOVE.includes(k)) { e.preventDefault(); if (!keys.has(k)) { keys.add(k); pushVec(); } }
 });
 addEventListener("keyup", e => {
