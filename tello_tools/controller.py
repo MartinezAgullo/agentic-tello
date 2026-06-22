@@ -5,7 +5,7 @@ unguarded actuation (`_takeoff`, `_rc`, …). Callers should go through
 SafeTello / ControlArbiter, not here, except for emergency stop.
 
 The video path (LowLatencyFrameRead) is ported from the previous controller.
-Two hard-won lessons are baked in (see the project CLAUDE.md):
+Two hard-won lessons are baked in:
   1. Drain the OS UDP buffer before PyAV opens the port.
   2. Continuously skip stale backlog frames so latency can't accumulate.
 """
@@ -139,7 +139,7 @@ class LowLatencyFrameRead:
                         self.decode_fps = win_decoded / win_elapsed
                         self.skip_fps = win_skipped / win_elapsed
                         published = self.decode_fps - self.skip_fps
-                        # The CLAUDE.md's first latency diagnostic: decode/skip/published.
+                        # The first latency diagnostic: decode/skip/published.
                         # decode well below the stream rate = consumer-bound = the decode
                         # thread is being starved of the GIL (see worker). Skip bursts with
                         # healthy decode are just the anti-backlog drain working, not a fault.

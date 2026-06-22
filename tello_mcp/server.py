@@ -11,7 +11,7 @@ an *external* client crossing a process boundary. Routing the in-process agent t
 MCP would add a serialization round-trip for no benefit and break the fast-loop cadence.
 See tello_mcp/README.md → "Who calls what".
 
-Design rules it honours (see project `CLAUDE.md`):
+Design rules it honours:
 
 - **One chokepoint.** djitellopy is not safe for concurrent sends, so *every* actuation
   — tool calls and the periodic `arb.tick()` watchdog — runs on a single control thread

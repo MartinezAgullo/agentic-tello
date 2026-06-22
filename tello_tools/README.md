@@ -160,5 +160,5 @@ Run this before any flight, then do first flights low, slow, with E-STOP in reac
 - `TelloController` exposes raw `_`-prefixed actuation by design — go through
   `SafeTello`/`ControlArbiter` instead, except for `emergency()`.
 - `LowLatencyFrameRead` continuously skips stale backlog frames so latency can't
-  accumulate, and the decode thread must not be GIL-starved — see the project
-  `CLAUDE.md` ("Streaming + concurrency lessons") before adding worker threads.
+  accumulate, and the decode thread must not be GIL-starved — keep that streaming +
+  concurrency rule in mind before adding worker threads.

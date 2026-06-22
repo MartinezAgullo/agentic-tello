@@ -1,8 +1,8 @@
 """PerceptionWorker — runs the detector on the live feed in its own thread.
 
 Gated on frame **identity** + a short sleep so it never busy-loops the GIL and
-starves the video decode thread (the cardinal rule from CLAUDE.md). Publishes the
-latest detections for the web overlay / agent loop to read.
+starves the video decode thread (the project's cardinal performance rule). Publishes
+the latest detections for the web overlay / agent loop to read.
 
 Query changes are applied at the top of the loop (not from the caller's thread), so
 the model is never reconfigured mid-inference.
@@ -62,8 +62,8 @@ class PerceptionWorker:
                 time.sleep(0.01)         # nothing new (or nothing to look for) — yield
                 continue
             # Rate-cap: detector inference holds the GIL; running it flat-out starves the
-            # video decode thread (CLAUDE.md). Sleep out the rest of the period so the
-            # decoder gets its GIL slices. The sleep itself releases the GIL.
+            # video decode thread. Sleep out the rest of the period so the decoder gets
+            # its GIL slices. The sleep itself releases the GIL.
             wait = min_period - (time.monotonic() - last_detect)
             if wait > 0:
                 time.sleep(wait)

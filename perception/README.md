@@ -18,9 +18,9 @@ them — without invoking the slow VLM. The VLM only reasons about these boxes o
   `{label, score, box, center, area_frac}`. `area_frac` (box area ÷ frame area) is a
   cheap distance proxy — bigger = closer — used by the Phase D approach controller.
 - **`PerceptionWorker`** reads the latest frame, gated on frame **identity** + a short
-  sleep so it never busy-loops the GIL and starves the video decoder (the cardinal rule
-  in the project `CLAUDE.md`). Query changes are applied inside the worker loop, so the
-  model is never reconfigured mid-inference.
+  sleep so it never busy-loops the GIL and starves the video decoder (the project's
+  cardinal performance rule: never starve the decode thread). Query changes are applied
+  inside the worker loop, so the model is never reconfigured mid-inference.
 
 ## Dependencies
 
@@ -44,8 +44,8 @@ appear on the live feed, and the telemetry panel shows **Detections** (count) an
 **Det fps**. Clear the box + Detect again to stop.
 
 > Watch `Stream fps` vs `Det fps`. If running detection makes `Stream fps` sag well below
-> ~24–30, the detector is starving the decode thread — per `CLAUDE.md`, move the worker to
-> a separate process. On the GB10 (CUDA releases the GIL) it should hold.
+> ~24–30, the detector is starving the decode thread — move the worker to a separate
+> process. On the GB10 (CUDA releases the GIL) it should hold.
 
 ## In-thread vs. its own process — the trade-off
 
@@ -73,8 +73,8 @@ the choice is a trade-off, not a free lunch:
   shared model/CUDA context, easy to debug — and **CUDA calls release the GIL**, so on a
   capable GPU the detector already spends most of its time GIL-free. The starvation only
   bites if a *CPU-bound* Python section in the worker hogs the GIL. Principle: don't pay the
-  IPC/complexity tax until the `Stream fps` readout proves you need it (matches `CLAUDE.md`:
-  *"promote the detector to its own process **if** it starves the decoder"* — conditional).
+  IPC/complexity tax until the `Stream fps` readout proves you need it — the rule is
+  conditional: *promote the detector to its own process **if** it starves the decoder*.
 
 ## Use from code
 
