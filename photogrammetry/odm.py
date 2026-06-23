@@ -223,16 +223,20 @@ def craft_3d_model(
     ply_path = _find_first(model_dir, ".ply")
 
     # ── retire the consumed source images (images + telemetry sidecars) ─────────
+    # Group this batch into its own processed/<name>/ folder (same timestamp as the
+    # model), so each reconstruction's inputs stay bundled rather than piling up
+    # loose. These folders hold only captured media and are never committed to git.
+    batch_dir = os.path.join(config.PROCESSED_DIR, name)
     moved: list[str] = []
     for img in images:
-        moved.append(_move_into(config.PROCESSED_DIR, img))
+        moved.append(_move_into(batch_dir, img))
         sidecar = os.path.splitext(img)[0] + ".json"
         if os.path.exists(sidecar):
-            _move_into(config.PROCESSED_DIR, sidecar)
+            _move_into(batch_dir, sidecar)
 
     log(
         f"[3d] done: {name} (obj={'yes' if obj_path else 'no'}, "
-        f"ply={'yes' if ply_path else 'no'}); {len(moved)} image(s) archived."
+        f"ply={'yes' if ply_path else 'no'}); {len(moved)} image(s) archived → {batch_dir}"
     )
     report("done", 100.0, "COMPLETED")
 

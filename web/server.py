@@ -197,7 +197,7 @@ def _handle_cmd(arb: ControlArbiter, c: TelloController, name: str, args: tuple)
                 log("⚠ Geofence DISABLED — the agent may now leave the room / cross doorways. "
                     "No obstacle avoidance exists; fly low/slow with E-STOP in reach.")
         elif name == "snapshot":
-            fn = take_snapshot(c, "manual"); log(f"Snapshot: {fn}")
+            fn = take_snapshot(c, "manual", dest_dir=config.CAPTURES_DIR); log(f"Snapshot: {fn}")
         elif name == "cenital":
             fn = take_snapshot(c, "cenital")
             if fn is None:

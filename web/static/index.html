@@ -5,43 +5,51 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agentic Tello</title>
 <style>
-  :root { --bg:#15171c; --panel:#1e2128; --line:#2c303a; --txt:#e6e8ec; --dim:#9aa0ab;
-          --ok:#36d399; --warn:#fbbd23; --err:#f87272; --accent:#3b82f6; }
+  :root { --bg:#0a0f0a; --panel:#0f160f; --line:#1e2b1e; --txt:#cdeed8; --dim:#5e8c6e;
+          --ok:#41ff9f; --warn:#ffb000; --err:#ff5b5b; --accent:#41ff9f;
+          --glow:0 0 6px rgba(65,255,159,.35); }
   * { box-sizing:border-box; }
   body { margin:0; font:14px/1.5 ui-monospace,Menlo,Consolas,monospace;
          background:var(--bg); color:var(--txt); }
   header { padding:10px 16px; border-bottom:1px solid var(--line); display:flex;
            align-items:center; gap:16px; }
-  header h1 { font-size:16px; margin:0; font-weight:700; }
-  #mode { padding:2px 10px; border-radius:4px; font-weight:700; }
-  .MANUAL { background:#3a2a10; color:var(--warn); }
-  .AUTO   { background:#0f2e22; color:var(--ok); }
+  header h1 { font-size:15px; margin:0; font-weight:700; letter-spacing:2px;
+              text-transform:uppercase; color:var(--accent); text-shadow:var(--glow); }
+  #mode { padding:2px 12px; border-radius:3px; font-weight:700; letter-spacing:1px;
+          border:1px solid currentColor; background:transparent; }
+  .MANUAL { color:var(--warn); }
+  .AUTO   { color:var(--ok); text-shadow:var(--glow); }
   main { display:grid; grid-template-columns:2fr 1fr; gap:14px; padding:14px; }
   .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; }
   #video { width:100%; border-radius:6px; background:#000; display:block; }
   .grid { display:grid; grid-template-columns:auto auto; gap:2px 14px; margin-top:10px; }
   .grid .k { color:var(--dim); } .grid .v { text-align:right; }
   .btns { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
-  button { background:#262a33; color:var(--txt); border:1px solid var(--line);
-           border-radius:6px; padding:8px 12px; cursor:pointer; font:inherit; }
-  button:hover { border-color:var(--accent); }
-  #estop { background:#4a1414; border-color:#7a2222; color:#ffd7d7; font-weight:700;
-           flex:1 0 100%; padding:12px; }
-  #estop:hover { background:#5e1818; }
-  #toggle { background:#13233f; border-color:#274a82; }
+  button { background:#101a10; color:var(--txt); border:1px solid var(--line);
+           border-radius:4px; padding:8px 12px; cursor:pointer; font:inherit;
+           text-transform:uppercase; letter-spacing:.8px; transition:border-color .12s, color .12s; }
+  button:hover { border-color:var(--accent); color:var(--accent); text-shadow:var(--glow); }
+  #estop { flex:1 0 100%; padding:12px; font-weight:700; letter-spacing:1.5px;
+           color:#ffd7d7; border:1px solid #7a2222;
+           background:repeating-linear-gradient(45deg,#2a0d0d,#2a0d0d 10px,#3a1212 10px,#3a1212 20px); }
+  #estop:hover { border-color:var(--err); color:#fff; text-shadow:none;
+                 background:repeating-linear-gradient(45deg,#3a1212,#3a1212 10px,#4a1818 10px,#4a1818 20px); }
+  #toggle { background:#0c1f17; border-color:#1d5a40; color:var(--ok); }
   .goal { display:flex; gap:8px; margin-top:12px; }
-  .goal input { flex:1; background:#13151a; border:1px solid var(--line); color:var(--txt);
-                border-radius:6px; padding:8px; font:inherit; }
-  #log { height:260px; overflow-y:auto; background:#13151a; border:1px solid var(--line);
-         border-radius:6px; padding:8px; margin-top:12px; white-space:pre-wrap;
-         font-size:12.5px; color:#cfd3da; }
+  .goal input { flex:1; background:#0a120a; border:1px solid var(--line); color:var(--txt);
+                border-radius:4px; padding:8px; font:inherit; }
+  .goal input:focus { outline:none; border-color:var(--accent); box-shadow:var(--glow); }
+  #log { height:260px; overflow-y:auto; background:#0a120a; border:1px solid var(--line);
+         border-radius:4px; padding:8px; margin-top:12px; white-space:pre-wrap;
+         font-size:12.5px; color:var(--dim); }
   .help { color:var(--dim); font-size:12px; margin-top:10px; }
   .help b { color:var(--txt); }
   h3 { margin:0 0 6px; font-size:13px; color:var(--dim); text-transform:uppercase; letter-spacing:.5px; }
   nav.tabs { display:flex; gap:6px; margin-left:auto; }
   nav.tabs button { background:transparent; border:1px solid transparent; color:var(--dim);
                     padding:6px 14px; border-radius:6px; }
-  nav.tabs button.active { background:var(--panel); border-color:var(--line); color:var(--txt); }
+  nav.tabs button { text-transform:uppercase; letter-spacing:.8px; }
+  nav.tabs button.active { background:var(--panel); border-color:var(--accent); color:var(--accent); }
   #cenital-img { width:100%; border-radius:6px; background:#000; display:block; margin-top:12px;
                  min-height:200px; }
   .ckbx { display:flex; align-items:center; gap:8px; color:var(--dim); margin-top:10px; }
@@ -53,11 +61,15 @@
                            border-radius:6px; color:var(--txt); cursor:pointer; }
   #viewer-toolbar button:hover { border-color:var(--accent); }
   #viewer-toolbar button.active { background:#13233f; border-color:#274a82; color:var(--accent); }
+  #viewer-toolbar .sep { width:22px; height:1px; background:var(--line); margin:3px 0; }
+  /* fill the screen in fullscreen despite the fixed 480px height (inline style) */
+  #viewer:fullscreen { width:100% !important; height:100% !important; border-radius:0; }
+  #viewer:-webkit-full-screen { width:100% !important; height:100% !important; border-radius:0; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Agentic Tello</h1>
+  <h1>Tello // Ground Control</h1>
   <span id="mode" class="MANUAL">MANUAL</span>
   <span id="conn" style="color:var(--err)">● disconnected</span>
   <nav class="tabs">
@@ -99,7 +111,7 @@
         <button onclick="cmd('land')">Land (L)</button>
         <button id="toggle" onclick="toggleMode()">Arm AUTO</button>
         <button onclick="cmd('snapshot')">Snapshot</button>
-        <button onclick="snapshot3d()" title="Queue the current frame for 3D reconstruction">🧊 3D-snapshot</button>
+        <button onclick="snapshot3d()" title="Queue the current frame for 3D reconstruction">3D Snapshot</button>
         <button id="geofence-btn" onclick="toggleGeofence()"
                 title="Lift the geofence so the agent can leave the room / cross doorways">Geofence: —</button>
         <button id="estop" onclick="estop()">■ EMERGENCY STOP (Esc)</button>
@@ -127,7 +139,7 @@
   <div class="panel">
     <h3>Cenital view — bird's-eye-view from a single frame</h3>
     <div class="btns">
-      <button id="cenital-btn" onclick="generateCenital()">📸 Snapshot → cenital view</button>
+      <button id="cenital-btn" onclick="generateCenital()">Snapshot → Cenital View</button>
     </div>
     <label class="ckbx">
       <input type="checkbox" id="cenital-floor"> floor segmentation (geometry ∩ appearance)
@@ -144,9 +156,9 @@
   <div class="panel">
     <h3>3D Models — offline photogrammetry (OpenDroneMap)</h3>
     <div class="btns">
-      <button onclick="snapshot3d()" title="Queue the current frame for reconstruction">🧊 3D-snapshot</button>
-      <button id="craft-btn" onclick="craft3d()">🏗️ Craft 3D model</button>
-      <button onclick="loadModels()">⟳ Refresh list</button>
+      <button onclick="snapshot3d()" title="Queue the current frame for reconstruction">3D Snapshot</button>
+      <button id="craft-btn" onclick="craft3d()">Craft 3D Model</button>
+      <button onclick="loadModels()">Refresh List</button>
     </div>
     <div class="help">
       <b>3D-snapshot</b> queues the live frame into <code>snapshots/storage_3D/pending_snapshots/</code>.
@@ -166,22 +178,41 @@
     <div id="viewer" style="width:100%; height:480px; border-radius:6px; background:#000;
                             margin-top:12px; position:relative; overflow:hidden;">
       <div id="viewer-toolbar">
-        <div class="row"><button data-act="up" title="Rotate up">▲</button></div>
+        <!-- rotate: each pair = one axis -->
+        <div class="row"><button data-act="up" title="Rotate up (pitch)">▲</button></div>
         <div class="row">
-          <button data-act="left" title="Rotate left">◀</button>
-          <button data-act="reset" title="Reset / fit view">⌂</button>
-          <button data-act="right" title="Rotate right">▶</button>
+          <button data-act="left" title="Rotate left (yaw)">◀</button>
+          <button data-act="reset" title="Reset view (rotation + zoom + pan)">⌂</button>
+          <button data-act="right" title="Rotate right (yaw)">▶</button>
         </div>
-        <div class="row"><button data-act="down" title="Rotate down">▼</button></div>
+        <div class="row"><button data-act="down" title="Rotate down (pitch)">▼</button></div>
         <div class="row">
           <button data-act="rollccw" title="Roll left">↺</button>
           <button data-act="rollcw" title="Roll right">↻</button>
         </div>
+        <div class="sep"></div>
+        <!-- pan: shift the view centre (then zoom into off-centre parts) -->
+        <div class="row"><button data-act="panup" title="Pan up">⇧</button></div>
+        <div class="row">
+          <button data-act="panleft" title="Pan left">⇦</button>
+          <button data-act="recenter" title="Recenter view">✛</button>
+          <button data-act="panright" title="Pan right">⇨</button>
+        </div>
+        <div class="row"><button data-act="pandown" title="Pan down">⇩</button></div>
+        <div class="row">
+          <button data-act="panin" title="Pan forward (into view)">⊕</button>
+          <button data-act="panout" title="Pan back (out of view)">⊖</button>
+        </div>
+        <div class="sep"></div>
+        <!-- view -->
         <div class="row">
           <button data-act="zoomin" title="Zoom in">＋</button>
           <button data-act="zoomout" title="Zoom out">－</button>
         </div>
-        <div class="row"><button data-act="spin" title="Toggle auto-rotate">▶</button></div>
+        <div class="row">
+          <button data-act="fullscreen" title="Fullscreen">⛶</button>
+          <button data-act="spin" title="Toggle auto-rotate">▷</button>
+        </div>
       </div>
     </div>
   </div>
@@ -227,45 +258,74 @@ function initViewer() {
   scene.add(dir);
   wireToolbar(host);
   window.addEventListener("resize", onResize);
+  document.addEventListener("fullscreenchange", onResize);  // re-fit on enter/exit fullscreen
   animate();
 }
 
-// ── on-screen navigation (mouse-only orbit is fiddly) ────────────────────────
-// Orbit the camera around the target by spherical-angle deltas (radians).
-function orbitBy(dTheta, dPhi) {
-  const offset = camera.position.clone().sub(controls.target);
-  const sph = new THREE.Spherical().setFromVector3(offset);
-  sph.theta += dTheta;
-  sph.phi = Math.min(Math.max(sph.phi + dPhi, 0.001), Math.PI - 0.001);
-  camera.position.copy(controls.target).add(offset.setFromSpherical(sph));
-  controls.update();
-}
+// ── on-screen navigation: each button pair = one rotation axis ───────────────
 // Dolly in/out by scaling the camera→target distance (factor <1 zooms in).
 function dollyBy(factor) {
   const offset = camera.position.clone().sub(controls.target);
   camera.position.copy(controls.target).add(offset.multiplyScalar(factor));
   controls.update();
 }
-// Roll: spin the model around the camera's view axis (the 3rd rotational DOF that
-// OrbitControls itself can't give — it always keeps the horizon level).
-function rollBy(angle) {
+// Rotate the model in place about ONE of the camera's three orthogonal axes
+// (its world-matrix columns: 0=right, 1=up, 2=view). Each button pair drives a
+// single axis, so the three pairs never overlap. The mouse still moves the
+// camera; the buttons only spin the object.
+function rotateModel(matrixColumn, angle) {
   if (!currentObject) return;
-  currentObject.rotateOnWorldAxis(camera.getWorldDirection(new THREE.Vector3()), angle);
+  camera.updateMatrixWorld();
+  const axis = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, matrixColumn).normalize();
+  currentObject.rotateOnWorldAxis(axis, angle);
+}
+// Pan: shift BOTH camera and target along a camera axis, moving the view centre
+// (so you can then zoom into off-centre parts). Step scales with view distance.
+function panBy(matrixColumn, sign) {
+  camera.updateMatrixWorld();
+  const dist = camera.position.distanceTo(controls.target) || 1;
+  const v = new THREE.Vector3()
+    .setFromMatrixColumn(camera.matrixWorld, matrixColumn)
+    .normalize()
+    .multiplyScalar(sign * dist * 0.15);
+  camera.position.add(v);
+  controls.target.add(v);
+  controls.update();
+}
+// Recentre the view on the model origin, keeping the current angle and distance.
+function recenter() {
+  const offset = camera.position.clone().sub(controls.target);
+  controls.target.set(0, 0, 0);
+  camera.position.copy(offset);
+  controls.update();
+}
+function toggleFullscreen(host) {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else if (host.requestFullscreen) host.requestFullscreen();
 }
 function wireToolbar(host) {
-  const STEP = 0.3;  // radians per click
+  const STEP = 0.3;                   // radians per click
+  const RIGHT = 0, UP = 1, VIEW = 2;  // camera world-matrix columns
   const acts = {
-    up:        () => orbitBy(0, -STEP),
-    down:      () => orbitBy(0, STEP),
-    left:      () => orbitBy(-STEP, 0),
-    right:     () => orbitBy(STEP, 0),
-    rollccw:   () => rollBy(STEP),
-    rollcw:    () => rollBy(-STEP),
-    zoomin:    () => dollyBy(0.8),
-    zoomout:   () => dollyBy(1.25),
-    reset:     () => { if (currentObject) currentObject.rotation.set(0, 0, 0); fitCamera(lastFit); },
-    spin:      (btn) => { controls.autoRotate = !controls.autoRotate;
-                          btn.classList.toggle("active", controls.autoRotate); },
+    up:         () => rotateModel(RIGHT, STEP),   // pitch axis (camera right)
+    down:       () => rotateModel(RIGHT, -STEP),
+    left:       () => rotateModel(UP, STEP),      // yaw axis (camera up)
+    right:      () => rotateModel(UP, -STEP),
+    rollccw:    () => rotateModel(VIEW, STEP),    // roll axis (camera view)
+    rollcw:     () => rotateModel(VIEW, -STEP),
+    panup:      () => panBy(UP, 1),               // pan along camera up
+    pandown:    () => panBy(UP, -1),
+    panleft:    () => panBy(RIGHT, -1),           // pan along camera right
+    panright:   () => panBy(RIGHT, 1),
+    panin:      () => panBy(VIEW, -1),            // pan along camera view (depth)
+    panout:     () => panBy(VIEW, 1),
+    recenter:   () => recenter(),
+    fullscreen: () => toggleFullscreen(host),
+    zoomin:     () => dollyBy(0.8),
+    zoomout:    () => dollyBy(1.25),
+    reset:      () => { if (currentObject) currentObject.rotation.set(0, 0, 0); recenter(); fitCamera(lastFit); },
+    spin:       (btn) => { controls.autoRotate = !controls.autoRotate;
+                           btn.classList.toggle("active", controls.autoRotate); },
   };
   host.querySelectorAll("#viewer-toolbar button").forEach((btn) => {
     btn.addEventListener("click", () => acts[btn.dataset.act](btn));
@@ -423,7 +483,7 @@ function sendQueriesAll() { send({type:"queries_all"}); }
 function snapshot3d() { send({type:"snapshot_3d"}); }
 function craft3d() {
   send({type:"craft_3d"});
-  $("craft-btn").textContent = "⏳ crafting…";
+  $("craft-btn").textContent = "CRAFTING…";
 }
 let model3dTs = 0;
 function renderModel3d(s) {
@@ -432,16 +492,16 @@ function renderModel3d(s) {
   model3dTs = m.ts;
   const btn = $("craft-btn"), prog = $("craft-progress");
   if (m.busy) {
-    btn.textContent = "⏳ crafting…";
+    btn.textContent = "CRAFTING…";
     prog.textContent = `Reconstruction: ${m.stage || "…"} ` +
       (m.status ? `[${m.status}] ` : "") +
       (m.progress != null ? `${m.progress}%` : "");
   } else if (m.stage === "error") {
-    btn.textContent = "🏗️ Craft 3D model";
-    prog.innerHTML = `<span style="color:var(--err)">✖ ${m.error || "failed"}</span>`;
+    btn.textContent = "Craft 3D Model";
+    prog.innerHTML = `<span style="color:var(--err)">ERROR: ${m.error || "failed"}</span>`;
   } else if (m.stage === "done") {
-    btn.textContent = "🏗️ Craft 3D model";
-    prog.innerHTML = `<span style="color:var(--ok)">✔ ${m.name || "model"} ready</span>`;
+    btn.textContent = "Craft 3D Model";
+    prog.innerHTML = `<span style="color:var(--ok)">READY: ${m.name || "model"}</span>`;
     if (typeof window.loadModels === "function") window.loadModels();
   } else if (m.pending != null) {
     prog.textContent = `${m.pending} image(s) queued for reconstruction.`;
@@ -461,14 +521,14 @@ function switchTab(name) {
 function generateCenital() {
   const floor = $("cenital-floor").checked;
   send({type:"cmd", name:"cenital", args:[floor]});
-  $("cenital-btn").textContent = "⏳ generating…";
+  $("cenital-btn").textContent = "GENERATING…";
 }
 let cenitalTs = 0;
 function refreshCenital(cv) {
   if (!cv || !cv.ts || cv.ts === cenitalTs) return;
   cenitalTs = cv.ts;
   $("cenital-img").src = "/cenital/panel?ts=" + cv.ts;   // cache-bust
-  $("cenital-btn").textContent = "📸 Snapshot → cenital view";
+  $("cenital-btn").textContent = "Snapshot → Cenital View";
 }
 
 // ── keyboard → manual stick vector ─────────────────────────────────────────

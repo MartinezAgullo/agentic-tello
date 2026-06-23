@@ -89,6 +89,8 @@ WEB_PORT = 8000
 
 # ── output ──────────────────────────────────────────────────────────────────
 SNAPSHOT_DIR = "snapshots"
+# Standard (operator) snapshots from the Snapshot button / P key land here.
+CAPTURES_DIR = os.path.join(SNAPSHOT_DIR, "captures")
 # Bird's-eye-view / pseudo-orthophoto outputs land in a sub-folder of snapshots.
 BEV_DIR = os.path.join(SNAPSHOT_DIR, "cenital_view")
 

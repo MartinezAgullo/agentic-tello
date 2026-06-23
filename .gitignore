@@ -9,8 +9,11 @@ wheels/
 # Virtual environments
 .venv/
 
-# Runtime output (3D photogrammetry storage lives under snapshots/storage_3D/)
-snapshots/
+# Runtime output — track the folder structure (.gitkeep) but not the captured media.
+# (3D photogrammetry storage lives under snapshots/storage_3D/)
+snapshots/**
+!snapshots/**/
+!snapshots/**/.gitkeep
 
 # Model weights — downloaded automatically on first run (ultralytics)
 *.pt
