@@ -45,6 +45,14 @@
   #cenital-img { width:100%; border-radius:6px; background:#000; display:block; margin-top:12px;
                  min-height:200px; }
   .ckbx { display:flex; align-items:center; gap:8px; color:var(--dim); margin-top:10px; }
+  #viewer-toolbar { position:absolute; top:10px; right:10px; z-index:5;
+                    display:flex; flex-direction:column; gap:5px; align-items:center; }
+  #viewer-toolbar .row { display:flex; gap:4px; }
+  #viewer-toolbar button { width:30px; height:30px; padding:0; font-size:14px; line-height:1;
+                           background:rgba(30,33,40,.85); border:1px solid var(--line);
+                           border-radius:6px; color:var(--txt); cursor:pointer; }
+  #viewer-toolbar button:hover { border-color:var(--accent); }
+  #viewer-toolbar button.active { background:#13233f; border-color:#274a82; color:var(--accent); }
 </style>
 </head>
 <body>
@@ -55,6 +63,7 @@
   <nav class="tabs">
     <button id="tab-control" class="active" onclick="switchTab('control')">Control</button>
     <button id="tab-cenital" onclick="switchTab('cenital')">Cenital view</button>
+    <button id="tab-models3d" onclick="switchTab('models3d')">3D Models</button>
   </nav>
 </header>
 
@@ -90,6 +99,7 @@
         <button onclick="cmd('land')">Land (L)</button>
         <button id="toggle" onclick="toggleMode()">Arm AUTO</button>
         <button onclick="cmd('snapshot')">Snapshot</button>
+        <button onclick="snapshot3d()" title="Queue the current frame for 3D reconstruction">🧊 3D-snapshot</button>
         <button id="geofence-btn" onclick="toggleGeofence()"
                 title="Lift the geofence so the agent can leave the room / cross doorways">Geofence: —</button>
         <button id="estop" onclick="estop()">■ EMERGENCY STOP (Esc)</button>
@@ -129,6 +139,215 @@
     <img id="cenital-img" alt="no cenital view yet — press the button">
   </div>
 </div>
+
+<div id="view-models3d" style="display:none; padding:14px">
+  <div class="panel">
+    <h3>3D Models — offline photogrammetry (OpenDroneMap)</h3>
+    <div class="btns">
+      <button onclick="snapshot3d()" title="Queue the current frame for reconstruction">🧊 3D-snapshot</button>
+      <button id="craft-btn" onclick="craft3d()">🏗️ Craft 3D model</button>
+      <button onclick="loadModels()">⟳ Refresh list</button>
+    </div>
+    <div class="help">
+      <b>3D-snapshot</b> queues the live frame into <code>snapshots/storage_3D/pending_snapshots/</code>.
+      Capture several views (orbit the object), then <b>Craft 3D model</b> sends them to the
+      local ODM node, downloads the textured model into <code>snapshots/storage_3D/3D_models/</code>, and
+      archives the source images to <code>snapshots/storage_3D/processed/</code>.
+    </div>
+    <div id="craft-progress" class="help" style="margin-top:8px"></div>
+    <div class="goal" style="align-items:center">
+      <label class="k" style="color:var(--dim)">Model</label>
+      <select id="model-select" onchange="showModel()"
+              style="flex:1; background:#13151a; border:1px solid var(--line);
+                     color:var(--txt); border-radius:6px; padding:8px; font:inherit;">
+        <option value="">— no models yet —</option>
+      </select>
+    </div>
+    <div id="viewer" style="width:100%; height:480px; border-radius:6px; background:#000;
+                            margin-top:12px; position:relative; overflow:hidden;">
+      <div id="viewer-toolbar">
+        <div class="row"><button data-act="up" title="Rotate up">▲</button></div>
+        <div class="row">
+          <button data-act="left" title="Rotate left">◀</button>
+          <button data-act="reset" title="Reset / fit view">⌂</button>
+          <button data-act="right" title="Rotate right">▶</button>
+        </div>
+        <div class="row"><button data-act="down" title="Rotate down">▼</button></div>
+        <div class="row">
+          <button data-act="rollccw" title="Roll left">↺</button>
+          <button data-act="rollcw" title="Roll right">↻</button>
+        </div>
+        <div class="row">
+          <button data-act="zoomin" title="Zoom in">＋</button>
+          <button data-act="zoomout" title="Zoom out">－</button>
+        </div>
+        <div class="row"><button data-act="spin" title="Toggle auto-rotate">▶</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!--
+  Three.js is loaded from a CDN here for convenience. For a fully-offline DGX
+  deployment, vendor these modules under web/static/vendor/ and point the import
+  map at them instead (the viewer code below is unchanged).
+-->
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
+import { MTLLoader } from "three/addons/loaders/MTLLoader.js";
+
+let renderer, scene, camera, controls, currentObject;
+let models = [];
+let lastFit = 5;  // remembered model size, for re-fitting the camera on reset
+
+function initViewer() {
+  const host = document.getElementById("viewer");
+  if (renderer || !host) return;
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x000000);
+  camera = new THREE.PerspectiveCamera(50, host.clientWidth / host.clientHeight, 0.01, 1000);
+  camera.position.set(0, 1, 3);
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(host.clientWidth, host.clientHeight);
+  host.appendChild(renderer.domElement);
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.2));
+  const dir = new THREE.DirectionalLight(0xffffff, 1.0);
+  dir.position.set(2, 4, 3);
+  scene.add(dir);
+  wireToolbar(host);
+  window.addEventListener("resize", onResize);
+  animate();
+}
+
+// ── on-screen navigation (mouse-only orbit is fiddly) ────────────────────────
+// Orbit the camera around the target by spherical-angle deltas (radians).
+function orbitBy(dTheta, dPhi) {
+  const offset = camera.position.clone().sub(controls.target);
+  const sph = new THREE.Spherical().setFromVector3(offset);
+  sph.theta += dTheta;
+  sph.phi = Math.min(Math.max(sph.phi + dPhi, 0.001), Math.PI - 0.001);
+  camera.position.copy(controls.target).add(offset.setFromSpherical(sph));
+  controls.update();
+}
+// Dolly in/out by scaling the camera→target distance (factor <1 zooms in).
+function dollyBy(factor) {
+  const offset = camera.position.clone().sub(controls.target);
+  camera.position.copy(controls.target).add(offset.multiplyScalar(factor));
+  controls.update();
+}
+// Roll: spin the model around the camera's view axis (the 3rd rotational DOF that
+// OrbitControls itself can't give — it always keeps the horizon level).
+function rollBy(angle) {
+  if (!currentObject) return;
+  currentObject.rotateOnWorldAxis(camera.getWorldDirection(new THREE.Vector3()), angle);
+}
+function wireToolbar(host) {
+  const STEP = 0.3;  // radians per click
+  const acts = {
+    up:        () => orbitBy(0, -STEP),
+    down:      () => orbitBy(0, STEP),
+    left:      () => orbitBy(-STEP, 0),
+    right:     () => orbitBy(STEP, 0),
+    rollccw:   () => rollBy(STEP),
+    rollcw:    () => rollBy(-STEP),
+    zoomin:    () => dollyBy(0.8),
+    zoomout:   () => dollyBy(1.25),
+    reset:     () => { if (currentObject) currentObject.rotation.set(0, 0, 0); fitCamera(lastFit); },
+    spin:      (btn) => { controls.autoRotate = !controls.autoRotate;
+                          btn.classList.toggle("active", controls.autoRotate); },
+  };
+  host.querySelectorAll("#viewer-toolbar button").forEach((btn) => {
+    btn.addEventListener("click", () => acts[btn.dataset.act](btn));
+  });
+}
+function onResize() {
+  const host = document.getElementById("viewer");
+  if (!renderer || !host.clientWidth) return;
+  camera.aspect = host.clientWidth / host.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(host.clientWidth, host.clientHeight);
+}
+function animate() {
+  requestAnimationFrame(animate);
+  if (controls) controls.update();
+  if (renderer) renderer.render(scene, camera);
+}
+
+// Pull the camera back to fit a model of the given max dimension, target at origin.
+function fitCamera(maxDim) {
+  lastFit = maxDim || 1;
+  const dist = lastFit / (2 * Math.tan((camera.fov * Math.PI) / 360));
+  camera.position.set(0, lastFit * 0.3, dist * 1.6);
+  camera.near = lastFit / 100;
+  camera.far = lastFit * 100;
+  camera.updateProjectionMatrix();
+  controls.target.set(0, 0, 0);
+  controls.update();
+}
+
+function clearObject() {
+  if (currentObject) { scene.remove(currentObject); currentObject = null; }
+}
+
+function loadModelInto(m) {
+  initViewer();
+  clearObject();
+  // rel_dir is already relative to the /models mount root (it includes the model
+  // folder name), so it must NOT be prefixed with m.name again.
+  const base = "/models/" + (m.rel_dir === "." ? "" : m.rel_dir + "/");
+  const onObj = (obj) => {
+    const box = new THREE.Box3().setFromObject(obj);
+    const size = box.getSize(new THREE.Vector3());
+    obj.position.sub(box.getCenter(new THREE.Vector3()));  // centre on the pivot origin
+    const pivot = new THREE.Group();                       // roll rotates this in place
+    pivot.add(obj);
+    scene.add(pivot);
+    currentObject = pivot;
+    fitCamera(Math.max(size.x, size.y, size.z));
+  };
+  if (m.mtl) {
+    new MTLLoader().setPath(base).load(m.mtl, (mats) => {
+      mats.preload();
+      new OBJLoader().setMaterials(mats).setPath(base).load(m.obj, onObj);
+    });
+  } else {
+    new OBJLoader().setPath(base).load(m.obj, onObj);
+  }
+}
+
+async function loadModels() {
+  const res = await fetch("/api/models");
+  models = await res.json();
+  const sel = document.getElementById("model-select");
+  if (!models.length) {
+    sel.innerHTML = '<option value="">— no models yet —</option>';
+    clearObject();
+    return;
+  }
+  sel.innerHTML = models.map((m, i) => `<option value="${i}">${m.name}</option>`).join("");
+  showModel();  // auto-show the newest
+}
+function showModel() {
+  const i = parseInt(document.getElementById("model-select").value, 10);
+  if (!Number.isNaN(i) && models[i]) loadModelInto(models[i]);
+}
+
+// expose to inline handlers / the websocket status code in the other script
+window.loadModels = loadModels;
+window.showModel = showModel;
+window.initViewer = initViewer;
+</script>
 
 <script>
 let ws, mode = "MANUAL";
@@ -173,6 +392,7 @@ function renderStatus(s) {
     b.style.borderColor = s.geofence ? "var(--line)" : "var(--err)";
   }
   if (s.cenital) refreshCenital(s.cenital);
+  if (s.model3d) renderModel3d(s);
   $("battery").style.color = (s.battery <= 20) ? "var(--err)" : "var(--txt)";
   // drone readiness (distinct from the websocket connection)
   if (s.error) { $("conn").textContent = "● " + s.error; $("conn").style.color = "var(--err)"; }
@@ -199,12 +419,44 @@ function sendGoal() { const t = $("goalbox").value.trim(); if (t) send({type:"go
 function sendQueries() { send({type:"queries", text: $("detectbox").value.trim()}); }
 function sendQueriesAll() { send({type:"queries_all"}); }
 
+// ── 3D photogrammetry ───────────────────────────────────────────────────────
+function snapshot3d() { send({type:"snapshot_3d"}); }
+function craft3d() {
+  send({type:"craft_3d"});
+  $("craft-btn").textContent = "⏳ crafting…";
+}
+let model3dTs = 0;
+function renderModel3d(s) {
+  const m = s.model3d;
+  if (!m || m.ts === model3dTs) return;
+  model3dTs = m.ts;
+  const btn = $("craft-btn"), prog = $("craft-progress");
+  if (m.busy) {
+    btn.textContent = "⏳ crafting…";
+    prog.textContent = `Reconstruction: ${m.stage || "…"} ` +
+      (m.status ? `[${m.status}] ` : "") +
+      (m.progress != null ? `${m.progress}%` : "");
+  } else if (m.stage === "error") {
+    btn.textContent = "🏗️ Craft 3D model";
+    prog.innerHTML = `<span style="color:var(--err)">✖ ${m.error || "failed"}</span>`;
+  } else if (m.stage === "done") {
+    btn.textContent = "🏗️ Craft 3D model";
+    prog.innerHTML = `<span style="color:var(--ok)">✔ ${m.name || "model"} ready</span>`;
+    if (typeof window.loadModels === "function") window.loadModels();
+  } else if (m.pending != null) {
+    prog.textContent = `${m.pending} image(s) queued for reconstruction.`;
+  }
+}
+
 // ── tabs + cenital view ─────────────────────────────────────────────────────
 function switchTab(name) {
   $("view-control").style.display  = (name === "control") ? "" : "none";
   $("view-cenital").style.display  = (name === "cenital") ? "block" : "none";
+  $("view-models3d").style.display = (name === "models3d") ? "block" : "none";
   $("tab-control").classList.toggle("active", name === "control");
   $("tab-cenital").classList.toggle("active", name === "cenital");
+  $("tab-models3d").classList.toggle("active", name === "models3d");
+  if (name === "models3d") { window.initViewer(); window.loadModels(); }  // refresh on open
 }
 function generateCenital() {
   const floor = $("cenital-floor").checked;

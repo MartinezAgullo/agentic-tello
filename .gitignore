@@ -9,7 +9,7 @@ wheels/
 # Virtual environments
 .venv/
 
-# Runtime output
+# Runtime output (3D photogrammetry storage lives under snapshots/storage_3D/)
 snapshots/
 
 # Model weights — downloaded automatically on first run (ultralytics)

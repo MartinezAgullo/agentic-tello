@@ -22,6 +22,7 @@ dependencies = [
     { name = "openai" },
     { name = "opencv-python" },
     { name = "paho-mqtt" },
+    { name = "pyodm" },
     { name = "ultralytics" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -45,6 +46,7 @@ requires-dist = [
     { name = "openai", specifier = ">=2.41.0" },
     { name = "opencv-python", specifier = ">=4.13.0.92" },
     { name = "paho-mqtt", specifier = ">=2.1.0" },
+    { name = "pyodm", specifier = ">=1.5.13" },
     { name = "ultralytics", specifier = ">=8.4.60" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.48.0" },
 ]
@@ -1676,6 +1678,20 @@ crypto = [
 ]
 
 [[package]]
+name = "pyodm"
+version = "1.5.13"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+    { name = "requests-toolbelt" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3b/9a/f1969f7ab5ff80208613e600f676dd981ca770aafef27cc6c8bfad6adfb5/pyodm-1.5.13.tar.gz", hash = "sha256:3d87add9178657c7739503e9b7edbfccf215621cf5efb5c0774534c80d817ba2", size = 13617, upload-time = "2026-04-13T03:18:32.054Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f0/58/f66710f0ba3ee483ca690ac6cf13489bcb43cb16f3cf549e9b45ebcd7f49/pyodm-1.5.13-py3-none-any.whl", hash = "sha256:e3f4a65f6f419df8d9934bd37449a758e46c28ae6fd035d31a32c1fe75d0851f", size = 14150, upload-time = "2026-04-13T03:18:30.933Z" },
+]
+
+[[package]]
 name = "pyparsing"
 version = "3.3.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1907,6 +1923,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ac/c3/e2a2b89f2d3e2179abd6d00ebd70bff6273f37fb3e0cc209f48b39d00cbf/requests-2.34.2.tar.gz", hash = "sha256:f288924cae4e29463698d6d60bc6a4da69c89185ad1e0bcc4104f584e960b9ed", size = 142856, upload-time = "2026-05-14T19:25:27.735Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a0/f4/c67b0b3f1b9245e8d266f0f112c500d50e5b4e83cb6f3b71b6528104182a/requests-2.34.2-py3-none-any.whl", hash = "sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0", size = 73075, upload-time = "2026-05-14T19:25:26.443Z" },
+]
+
+[[package]]
+name = "requests-toolbelt"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f3/61/d7545dafb7ac2230c70d38d31cbfe4cc64f7144dc41f6e4e4b78ecd9f5bb/requests-toolbelt-1.0.0.tar.gz", hash = "sha256:7681a0a3d047012b5bdc0ee37d7f8f07ebe76ab08caeccfc3921ce23c88d5bc6", size = 206888, upload-time = "2023-05-01T04:11:33.229Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3f/51/d4db610ef29373b879047326cbf6fa98b6c1969d6f6dc423279de2b1be2c/requests_toolbelt-1.0.0-py2.py3-none-any.whl", hash = "sha256:cccfdd665f0a24fcf4726e690f65639d272bb0637b9b92dfd91a5568ccf6bd06", size = 54481, upload-time = "2023-05-01T04:11:28.427Z" },
 ]
 
 [[package]]

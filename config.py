@@ -91,3 +91,21 @@ WEB_PORT = 8000
 SNAPSHOT_DIR = "snapshots"
 # Bird's-eye-view / pseudo-orthophoto outputs land in a sub-folder of snapshots.
 BEV_DIR = os.path.join(SNAPSHOT_DIR, "cenital_view")
+
+# ── 3D photogrammetry (PyODM → local OpenDroneMap node) ──────────────────────
+# Offline reconstruction storage, kept under the snapshots/ tree. Snapshots queued
+# for the next "craft 3D model" run land in PENDING; once consumed they move to
+# PROCESSED, and the textured model assets are downloaded into a timestamped
+# sub-folder of MODELS_3D_DIR.
+STORAGE_DIR = os.path.join(SNAPSHOT_DIR, "storage_3D")
+PENDING_SNAPSHOT_DIR = os.path.join(STORAGE_DIR, "pending_snapshots")
+PROCESSED_DIR = os.path.join(STORAGE_DIR, "processed")
+MODELS_3D_DIR = os.path.join(STORAGE_DIR, "3D_models")
+
+# OpenDroneMap processing node (NodeODM, typically a CUDA-enabled Docker container
+# on this same host). Point these elsewhere to offload processing to another box
+# without touching code — only the endpoint changes.
+ODM_HOST = os.getenv("ODM_HOST", "localhost")
+ODM_PORT = int(os.getenv("ODM_PORT", "3000"))
+ODM_TOKEN = os.getenv("ODM_TOKEN", "")  # empty unless the node enforces auth
+ODM_POLL_INTERVAL_S = float(os.getenv("ODM_POLL_INTERVAL_S", "3.0"))

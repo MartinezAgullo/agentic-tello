@@ -29,12 +29,20 @@ def snapshot_metadata(controller: TelloController, label: str = "snap") -> dict:
     }
 
 
-def take_snapshot(controller: TelloController, label: str = "snap") -> str | None:
+def take_snapshot(
+    controller: TelloController, label: str = "snap", dest_dir: str | None = None
+) -> str | None:
+    """Capture the current frame to ``dest_dir`` (default ``config.SNAPSHOT_DIR``).
+
+    Writes ``<label>_<timestamp>.jpg`` plus a ``.json`` telemetry sidecar. Pass
+    ``dest_dir=config.PENDING_SNAPSHOT_DIR`` to queue a frame for 3D reconstruction.
+    """
     frame = controller.get_frame()
     if frame is None or frame.size == 0:
         return None
-    os.makedirs(config.SNAPSHOT_DIR, exist_ok=True)
-    stem = os.path.join(config.SNAPSHOT_DIR, f"{label}_{time.strftime('%Y%m%d_%H%M%S')}")
+    out_dir = dest_dir or config.SNAPSHOT_DIR
+    os.makedirs(out_dir, exist_ok=True)
+    stem = os.path.join(out_dir, f"{label}_{time.strftime('%Y%m%d_%H%M%S')}")
     fname = f"{stem}.jpg"
     cv2.imwrite(fname, frame)
     try:

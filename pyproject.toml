@@ -20,6 +20,7 @@ dependencies = [
     "openai>=2.41.0",
     "opencv-python>=4.13.0.92",
     "paho-mqtt>=2.1.0",
+    "pyodm>=1.5.13",
     "ultralytics>=8.4.60",
     "uvicorn[standard]>=0.48.0",
 ]

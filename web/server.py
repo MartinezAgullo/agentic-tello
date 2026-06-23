@@ -36,6 +36,7 @@ from brain.vlm_client import VLMClient
 from perception.bev import generate_bev_panel
 from perception.detector import COCO_CLASSES, Detector
 from perception.worker import PerceptionWorker
+from photogrammetry import PhotogrammetryError, craft_3d_model, list_models, list_pending_images
 from tello_tools.arbiter import ArbiterBlocked, ControlArbiter
 from tello_tools.controller import TelloController
 from tello_tools.primitives import get_telemetry, take_snapshot
@@ -49,6 +50,7 @@ _status: dict = {"ready": False}
 _log: collections.deque = collections.deque(maxlen=300)
 _goal: str | None = None
 _stop = threading.Event()
+_craft_busy = threading.Lock()  # guards against overlapping "craft 3D model" runs
 
 _sys: dict = {"controller": None, "safe": None, "arb": None}
 
@@ -206,6 +208,21 @@ def _handle_cmd(arb: ControlArbiter, c: TelloController, name: str, args: tuple)
                 # BEV is CPU work (warp + seg); run off the control thread so it
                 # never starves flight. It only reads the saved file, no drone I/O.
                 threading.Thread(target=_make_cenital, args=(fn, floor), daemon=True).start()
+        elif name == "snapshot_3d":
+            fn = take_snapshot(c, "snap3d", dest_dir=config.PENDING_SNAPSHOT_DIR)
+            if fn is None:
+                log("3D-snapshot: no frame yet — is the stream up?")
+            else:
+                n = len(list_pending_images())
+                log(f"3D-snapshot: {fn} ({n} image(s) pending reconstruction)")
+                _status["model3d"] = {"pending": n, "ts": int(time.time() * 1000)}
+        elif name == "craft_3d":
+            if _craft_busy.locked():
+                log("craft 3D model: a reconstruction is already running — please wait.")
+            else:
+                # Reconstruction is long-running ODM work (minutes); run it off the
+                # control thread so flight/telemetry never block on it.
+                threading.Thread(target=_run_craft, daemon=True).start()
         elif name == "goal":
             global _goal
             _goal = args[0]
@@ -228,6 +245,38 @@ def _make_cenital(image_path: str, floor_seg: bool) -> None:
         log(f"[cenital] H={res['height']:.2f}m → {os.path.basename(res['panel_path'])}")
     except Exception as e:
         log(f"Cenital failed: {e}")
+
+
+def _run_craft() -> None:
+    """Drive one 3D reconstruction off-thread; publish progress to the UI."""
+    if not _craft_busy.acquire(blocking=False):
+        return  # another run slipped in; the handler already warned
+    try:
+        def on_progress(p: dict) -> None:
+            _status["model3d"] = {**p, "busy": True, "ts": int(time.time() * 1000)}
+
+        log("[3d] craft 3D model: starting reconstruction…")
+        res = craft_3d_model(log=log, on_progress=on_progress)
+        _status["model3d"] = {
+            "stage": "done",
+            "progress": 100.0,
+            "status": "COMPLETED",
+            "busy": False,
+            "name": res.name,
+            "models": list_models(),
+            "ts": int(time.time() * 1000),
+        }
+        log(f"[3d] model ready: {res.name} — open the 3D Models tab to view it.")
+    except PhotogrammetryError as e:
+        _status["model3d"] = {"stage": "error", "busy": False, "error": str(e),
+                              "ts": int(time.time() * 1000)}
+        log(f"[3d] reconstruction failed: {e}")
+    except Exception as e:
+        _status["model3d"] = {"stage": "error", "busy": False, "error": str(e),
+                              "ts": int(time.time() * 1000)}
+        log(f"[3d] unexpected error: {e}")
+    finally:
+        _craft_busy.release()
 
 
 def _init_perception(c: TelloController, arb: ControlArbiter) -> None:
@@ -365,6 +414,12 @@ def cenital_panel() -> Response:
     return FileResponse(path)
 
 
+@app.get("/api/models")
+def api_models() -> list[dict]:
+    """List crafted 3D models for the viewer tab (newest first)."""
+    return list_models()
+
+
 @app.websocket("/ws")
 async def ws(websocket: WebSocket) -> None:
     await websocket.accept()
@@ -416,10 +471,18 @@ def _handle_client(msg: dict) -> None:
             log(f"Detect queries: ALL ({len(COCO_CLASSES)} COCO classes)")
     elif t == "emergency":
         _cmd_q.put(("emergency", ()))
+    elif t == "snapshot_3d":
+        _cmd_q.put(("snapshot_3d", ()))
+    elif t == "craft_3d":
+        _cmd_q.put(("craft_3d", ()))
 
 
 # mount static after routes so "/" stays our handler
 app.mount("/static", StaticFiles(directory="web/static"), name="static")
+
+# serve crafted 3D model assets (OBJ/MTL/textures) for the Three.js viewer
+os.makedirs(config.MODELS_3D_DIR, exist_ok=True)
+app.mount("/models", StaticFiles(directory=config.MODELS_3D_DIR), name="models")
 
 
 if __name__ == "__main__":
