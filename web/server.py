@@ -216,13 +216,6 @@ def _handle_cmd(arb: ControlArbiter, c: TelloController, name: str, args: tuple)
                 n = len(list_pending_images())
                 log(f"3D-snapshot: {fn} ({n} image(s) pending reconstruction)")
                 _status["model3d"] = {"pending": n, "ts": int(time.time() * 1000)}
-        elif name == "craft_3d":
-            if _craft_busy.locked():
-                log("craft 3D model: a reconstruction is already running — please wait.")
-            else:
-                # Reconstruction is long-running ODM work (minutes); run it off the
-                # control thread so flight/telemetry never block on it.
-                threading.Thread(target=_run_craft, daemon=True).start()
         elif name == "goal":
             global _goal
             _goal = args[0]
@@ -277,6 +270,20 @@ def _run_craft() -> None:
         log(f"[3d] unexpected error: {e}")
     finally:
         _craft_busy.release()
+
+
+def _start_craft() -> None:
+    """Kick off a reconstruction unless one is already running.
+
+    3D reconstruction is fully drone-independent (it only reads saved snapshots
+    and talks to the ODM node), so it is dispatched directly here rather than
+    through the drone command queue — that way it still works when the Tello
+    isn't connected and the control thread has exited.
+    """
+    if _craft_busy.locked():
+        log("craft 3D model: a reconstruction is already running — please wait.")
+    else:
+        threading.Thread(target=_run_craft, daemon=True).start()
 
 
 def _init_perception(c: TelloController, arb: ControlArbiter) -> None:
@@ -472,9 +479,9 @@ def _handle_client(msg: dict) -> None:
     elif t == "emergency":
         _cmd_q.put(("emergency", ()))
     elif t == "snapshot_3d":
-        _cmd_q.put(("snapshot_3d", ()))
+        _cmd_q.put(("snapshot_3d", ()))  # needs the drone (captures a frame)
     elif t == "craft_3d":
-        _cmd_q.put(("craft_3d", ()))
+        _start_craft()  # drone-independent — dispatch directly, not via the control thread
 
 
 # mount static after routes so "/" stays our handler

@@ -22,6 +22,31 @@
   main { display:grid; grid-template-columns:2fr 1fr; gap:14px; padding:14px; }
   .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; }
   #video { width:100%; border-radius:6px; background:#000; display:block; }
+  /* ── HUD overlay on the live feed (corner brackets + reticle) ─────────────── */
+  .viewport { position:relative; line-height:0; }
+  .hud { position:absolute; inset:0; pointer-events:none; z-index:2; }
+  .hud .corner { position:absolute; width:24px; height:24px;
+                 border:2px solid var(--accent); opacity:.65; filter:drop-shadow(var(--glow)); }
+  .hud .tl { top:10px; left:10px;  border-right:0; border-bottom:0; }
+  .hud .tr { top:10px; right:10px; border-left:0;  border-bottom:0; }
+  .hud .bl { bottom:10px; left:10px;  border-right:0; border-top:0; }
+  .hud .br { bottom:10px; right:10px; border-left:0;  border-top:0; }
+  .hud .reticle { position:absolute; top:50%; left:50%; width:48px; height:48px;
+                  transform:translate(-50%,-50%); border:1px solid var(--accent);
+                  border-radius:50%; opacity:.55; filter:drop-shadow(var(--glow)); }
+  .hud .reticle::before, .hud .reticle::after { content:""; position:absolute;
+                  background:var(--accent); }
+  .hud .reticle::before { left:50%; top:-8px; bottom:-8px; width:1px; transform:translateX(-.5px); }
+  .hud .reticle::after  { top:50%; left:-8px; right:-8px; height:1px; transform:translateY(-.5px); }
+  .hud .tag { position:absolute; top:12px; left:42px; font-size:10px; letter-spacing:1.5px;
+              color:var(--accent); opacity:.7; text-shadow:var(--glow); }
+  .hud .tag::before { content:"● "; color:var(--err); animation:blink 1.4s steps(1) infinite; }
+  @keyframes blink { 50% { opacity:.15; } }
+  .hud .readout { position:absolute; left:14px; bottom:38px; display:flex; flex-direction:column;
+                  gap:3px; font-size:11px; letter-spacing:1px; }
+  .hud .readout span { display:flex; gap:8px; }
+  .hud .readout i { display:inline-block; width:30px; color:var(--dim); font-style:normal; }
+  .hud .readout b { color:var(--accent); text-shadow:var(--glow); font-weight:700; }
   .grid { display:grid; grid-template-columns:auto auto; gap:2px 14px; margin-top:10px; }
   .grid .k { color:var(--dim); } .grid .v { text-align:right; }
   .btns { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
@@ -81,7 +106,20 @@
 
 <main id="view-control">
   <section class="panel">
-    <img id="video" src="/video" alt="live feed">
+    <div class="viewport">
+      <img id="video" src="/video" alt="live feed">
+      <div class="hud">
+        <span class="corner tl"></span><span class="corner tr"></span>
+        <span class="corner bl"></span><span class="corner br"></span>
+        <span class="reticle"></span>
+        <span class="tag">LIVE FEED</span>
+        <div class="readout">
+          <span><i>ALT</i><b id="hud-alt">—</b></span>
+          <span><i>HDG</i><b id="hud-hdg">—</b></span>
+          <span><i>BAT</i><b id="hud-bat">—</b></span>
+        </div>
+      </div>
+    </div>
     <div class="help">
       Click the video first (to capture keys). Control pauses while you type in the goal/detect boxes.
       <b>W/S</b> fwd/back · <b>A/D</b> strafe · <b>↑/↓</b> up/down · <b>←/→</b> yaw ·
@@ -453,6 +491,11 @@ function renderStatus(s) {
   }
   if (s.cenital) refreshCenital(s.cenital);
   if (s.model3d) renderModel3d(s);
+  // HUD readout overlaid on the live feed (mirrors the telemetry panel)
+  set("hud-alt", s.height_cm !== undefined ? s.height_cm + " cm" : "—");
+  set("hud-hdg", s.heading !== undefined ? s.heading + "°" : "—");
+  set("hud-bat", s.battery !== undefined ? s.battery + "%" : "—");
+  $("hud-bat").style.color = (s.battery <= 20) ? "var(--err)" : "var(--accent)";
   $("battery").style.color = (s.battery <= 20) ? "var(--err)" : "var(--txt)";
   // drone readiness (distinct from the websocket connection)
   if (s.error) { $("conn").textContent = "● " + s.error; $("conn").style.color = "var(--err)"; }

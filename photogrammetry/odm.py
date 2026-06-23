@@ -37,17 +37,27 @@ import config
 # Source images we are willing to feed into the reconstruction.
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
 
-# ODM task options tuned for small indoor image sets from a single drone camera.
-# Override per call via the ``options`` argument; see the OpenDroneMap docs for
-# the full list of switches.
-DEFAULT_OPTIONS: dict = {
-    "use-3dmesh": True,  # full 3D mesh (orbit/indoor capture), not a 2.5D surface
-    "pc-quality": "medium",  # point-cloud density vs. runtime trade-off
-    "mesh-octree-depth": 11,
-    "texturing-single-material": True,  # one material → simpler OBJ for web viewers
-    "dsm": False,  # no digital surface model needed for an indoor object scan
-    "fast-orthophoto": False,
-}
+def default_options() -> dict:
+    """Assemble the ODM task options for a small single-camera indoor capture.
+
+    The quality knobs (feature/pc quality, feature count, geometric filtering)
+    are read from :mod:`config` so they can be tuned in one place; the structural
+    options below are fixed for this capture style. Override per call via the
+    ``options`` argument of :func:`craft_3d_model`.
+    """
+    opts: dict = {
+        "use-3dmesh": True,  # full 3D mesh (orbit/indoor capture), not a 2.5D surface
+        "mesh-octree-depth": 11,
+        "texturing-single-material": True,  # one material → simpler OBJ for web viewers
+        "dsm": False,  # no digital surface model needed for an indoor object scan
+        "fast-orthophoto": False,
+        "feature-quality": config.ODM_FEATURE_QUALITY,
+        "min-num-features": config.ODM_MIN_NUM_FEATURES,
+        "pc-quality": config.ODM_PC_QUALITY,
+    }
+    if config.ODM_PC_GEOMETRIC:
+        opts["pc-geometric"] = True  # boolean ODM flag; include only when enabled
+    return opts
 
 ProgressCallback = Callable[[dict], None]
 LogCallback = Callable[[str], None]
@@ -172,7 +182,7 @@ def craft_3d_model(
     if node is None:
         node = Node(config.ODM_HOST, config.ODM_PORT, token=config.ODM_TOKEN)
 
-    opts = {**DEFAULT_OPTIONS, **(options or {})}
+    opts = {**default_options(), **(options or {})}
 
     def report(stage: str, progress: float, status: str) -> None:
         if on_progress is not None:
