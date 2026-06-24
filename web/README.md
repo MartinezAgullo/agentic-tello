@@ -48,6 +48,41 @@ the server binds `0.0.0.0`). Port/host are set in the root `config.py`.
 > commands are disabled until the control thread connects). Check the terminal log for
 > `Connected, stream started.` vs `Tello connect failed`.
 
+## REST API (for an external orchestrator)
+
+Besides the browser WebSocket, the server exposes a plain HTTP surface so another agent
+(e.g. one running on the Mac, reaching the Spark over the forwarded port) can send goals,
+drive the drone, and download photos. The `tello_mcp` proxy forwards to exactly these.
+Handlers only enqueue onto the control thread or read shared status — they never touch
+djitellopy directly, so they can't starve the video decoder. Refused commands return
+**409** (safety guard / mode gate), not-ready returns **503**, bad input **422**.
+
+| Method & path | Body | Purpose |
+|---------------|------|---------|
+| `POST /mission` | `{"goal": "<NL>"}` | Autonomous mission: goal → arm AUTO → takeoff. Returns `202 {mission_id, goal, ts}` (async — poll status). |
+| `GET /mission/status` | — | Blackboard for polling; `phase == "done"` ⇒ goal satisfied; `photo_available` flags a capture. |
+| `GET /mission/photo` | — | The latest snapshot the mission captured (`image/jpeg`; **404** until one exists). |
+| `POST /mission/done` | `{"reason"?}` | Declare the current goal satisfied. |
+| `POST /control/mode` | `{"mode": "AUTO"\|"MANUAL"}` | Arm AUTO / return to MANUAL. |
+| `POST /control/takeoff` · `/land` · `/emergency` | — | Discrete actuation. |
+| `POST /control/move` | `{"direction", "cm"}` | Step in a direction. |
+| `POST /control/rotate` | `{"deg"}` | Yaw (negative = CCW). |
+| `POST /control/geofence` | `{"on": bool}` | Arm/disarm the geofence. |
+| `POST /control/snapshot` | `{"label"?}` | Capture a frame to disk; returns its path. |
+| `POST /control/target` | `{"queries": [...]}` | Set open-vocab detector queries. |
+| `GET /telemetry` · `/pose` · `/observation` · `/status` | — | Read-only context. |
+
+```bash
+# fire an autonomous mission and pull the photo when it's done
+curl -XPOST localhost:8000/mission -H 'content-type: application/json' \
+     -d '{"goal":"go to the plant and take a picture"}'
+curl localhost:8000/mission/status            # poll until "phase":"done"
+curl -o photo.jpg localhost:8000/mission/photo
+```
+
+> No auth: a `POST /mission` makes the drone take off, and the server binds `0.0.0.0`.
+> Keep it on a trusted link (the Spark↔Mac port-forward); don't expose port 8000 publicly.
+
 ## Controls
 
 **Click the video pane first** so the page captures your keystrokes.

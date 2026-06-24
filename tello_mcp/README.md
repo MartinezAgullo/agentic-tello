@@ -12,67 +12,77 @@
 
 A thin [Model Context Protocol](https://modelcontextprotocol.io) server (stdio) that
 exposes the project's high-level tools so an **external** agent (Claude, another LLM, any
-MCP client) can drive the drone or read its state. It wires the same stack the web UI uses
-— `TelloController → SafeTello → ControlArbiter` — and reuses `build_registry(ctx)` from
-the root `tools.py` **verbatim**: no actuation logic is duplicated here.
+MCP client) can drive the drone or read its state. It is a **pure HTTP proxy**: every
+tool and resource is a request to the web server's REST surface (`web/server.py`). The
+web server is the single process that owns the drone; this just forwards.
 
-> **Why low-level `Server`, not FastMCP?** FastMCP infers each tool's schema from a typed
-> Python signature, so using it would mean re-declaring all 13 tools here and duplicating
-> the JSON schemas that already live in `tools.py`. The low-level server registers that
-> existing registry as-is. FastMCP is the right default for a *greenfield* server that
-> writes its tools from scratch; here the registry is the single source of truth.
+> **It no longer opens its own drone connection.** It used to wire
+> `TelloController → SafeTello → ControlArbiter` and bind UDP 8889, which meant it could
+> not run alongside `web.server`. Now it binds no drone port, so it **runs concurrently
+> with the web server** — which is the intended topology: the web server owns the Tello
+> on the Spark; the Mac-side agent reaches it over the forwarded port through this proxy.
+
+Point it at the web server with `TELLO_WEB_URL` (default `http://localhost:8000`).
 
 ## What it does (and doesn't)
 
-- ✅ Request/response **planning + high-level acts**: arm, takeoff, move/rotate by step,
-  set detector target, snapshot, telemetry, declare done, e-stop.
-- ✅ **One chokepoint.** Every actuation — tool calls *and* the periodic `arb.tick()`
-  watchdog — runs on a single control thread (a 1-worker executor), so djitellopy never
-  gets concurrent sends. The async MCP handlers only enqueue onto it.
-- ✅ **Safety preserved.** Actuating tools still pass through the arbiter / `SafeTello`
-  guards (mode gate, geofence, height/battery caps, watchdog). `emergency_stop` is the
-  single guard-bypassing escape hatch.
+- ✅ Request/response **planning + high-level acts**: `start_mission` (NL goal → AUTO →
+  takeoff), arm/manual, takeoff/land, move/rotate by step, set detector target, snapshot,
+  telemetry, declare done, e-stop — plus `get_mission_photo` to pull the latest capture.
+- ✅ **Safety preserved, server-side.** Actuating REST endpoints pass through the same
+  arbiter / `SafeTello` guards (mode gate, geofence, height/battery caps, watchdog) and
+  the single drone control thread. A 409 from the server surfaces as `BLOCKED:`.
+- ✅ **Concurrent with the web server.** No djitellopy access here → no UDP-port conflict.
+  It *requires* the web server to be running; if it's down, tools return an error.
 - ❌ **Not the fast loop.** Continuous velocity control (`rc`, servoing) is deliberately
-  not a tool — an MCP round-trip per control tick would wreck the cadence.
-- ❌ **Not concurrent with the web server.** It opens the single djitellopy connection
-  (binds UDP 8889). Run `tello_mcp` *or* `main.py`, not both.
+  not a tool — a request per control tick would wreck the cadence.
+- ❌ **Adds no guards of its own.** All safety is enforced by the web server it proxies.
 
 ## Who calls what
 
-Two independent callers reach the **same** registry; the agent never goes through MCP:
+The agent never goes through MCP; the proxy and the agent both end at the same REST/tool
+surface, but the proxy crosses a process (and possibly host) boundary over HTTP:
 
 ```
-agent/loop.py (in-process)  ──direct function call──┐
-                                                    ▼
-external client ──MCP stdio──► tello_mcp.server ──► tools.py  (build_registry)
-   (separate Claude/LLM)                              │
-                                                      ▼
-                                  ControlArbiter → SafeTello → TelloController
+agent/loop.py (in-process, on the Spark)  ──direct function call──► tools.py ──► ControlArbiter → SafeTello → TelloController
+                                                                       ▲
+external MCP client ──MCP stdio──► tello_mcp.server ──HTTP──► web.server REST ──┘
+   (e.g. the Mac-side agent)                          :8000
 ```
 
-- **In-process agent path** (the one actually used in normal operation): `agent/loop.py`
-  → `tools[...].run(...)`. No serialization, no MCP, no extra process.
-- **MCP path** (optional, external only): a separate client → `tello_mcp.server` → the
-  same `tools.py`. Only used when you deliberately drive the drone from outside the system.
+- **In-process agent path** (normal operation): `agent/loop.py` → `tools[...].run(...)`.
+  No serialization, no MCP, no extra process.
+- **MCP proxy path** (optional, external): an MCP client → `tello_mcp.server` → HTTP →
+  the web server's REST endpoints. Used to drive missions from outside the Spark process.
 
 If you're wondering "does the running system need the MCP server?" — **no**. `main.py`
 runs the full agent + web UI without it.
 
 ## Tools
 
-The 10 registry tools (see `tello_tools/README.md` → *Tool registry*) plus 3 mode-control
-tools added here, because the registry's actuating tools call `arb.agent_*` and require
-**AUTO** — without these they'd be unreachable:
+Each tool is one HTTP call to a web-server REST endpoint. Mission-level and fine-grained
+control both surface, so an MCP client keeps the full control it had when this server drove
+the drone directly:
 
-| Tool | Does |
-|------|------|
-| `arm_auto` | Mode → AUTO so actuating tools execute. **Call before takeoff/move/rotate.** |
-| `to_manual` | Mode → MANUAL; actuating tools blocked, drone holds hover. |
-| `get_status` | Read mode (AUTO/MANUAL), flying, position, heading. |
+| Tool | REST endpoint | Does |
+|------|---------------|------|
+| `start_mission` | `POST /mission` | NL goal → arm AUTO → takeoff; returns a `mission_id` |
+| `mission_status` | `GET /mission/status` | Poll the blackboard (`phase=='done'` ⇒ goal met) |
+| `get_mission_photo` | `GET /mission/photo` | Download the latest mission capture as an image |
+| `report_done` | `POST /mission/done` | Declare the goal satisfied |
+| `arm_auto` / `to_manual` | `POST /control/mode` | Mode gate — **arm AUTO before takeoff/move/rotate** |
+| `takeoff` / `land` | `POST /control/{takeoff,land}` | Take off / land |
+| `move` / `rotate` | `POST /control/{move,rotate}` | Discrete step (cm) / yaw (deg) |
+| `set_target` | `POST /control/target` | Set open-vocab detector queries |
+| `take_snapshot` | `POST /control/snapshot` | Capture a frame to disk on the Spark |
+| `emergency_stop` | `POST /control/emergency` | Cut motors (bypasses guards) |
+| `get_telemetry` / `get_pose` / `get_observation` / `get_status` | `GET /telemetry`,`/pose`,`/observation`,`/status` | Read-only context |
 
-A typical session: `arm_auto` → `takeoff` → `set_target` → `move`/`rotate` →
-`take_snapshot` → `land`. Tool refusals (geofence, MANUAL, caps) come back as
-`BLOCKED: …`; other failures as `ERROR: …` — the server never crashes on a bad call.
+A typical autonomous session is one call: `start_mission` → poll `mission_status` until
+`phase == "done"` → `get_mission_photo`. Or drive manually: `arm_auto` → `takeoff` →
+`set_target` → `move`/`rotate` → `take_snapshot` → `land`. Refusals (geofence, MANUAL,
+caps) come back as `BLOCKED: …`; other failures as `ERROR: …` — the server never crashes
+on a bad call.
 
 ## Resources (read-only context)
 
@@ -86,8 +96,9 @@ can read context without spending a tool call:
 | `tello://observation` | target queries, mission phase, live detections |
 | `tello://status` | control mode (AUTO/MANUAL), flying, position, heading |
 
-The `get_telemetry` / `get_observation` / `get_status` **tools** are kept too, so
-tool-only clients (e.g. Claude Code) can still read state without resource support.
+Each resource read is a `GET` against the web server. The `get_telemetry` /
+`get_observation` / `get_status` **tools** are kept too, so tool-only clients (e.g. Claude
+Code) can still read state without resource support.
 
 ## Layout
 
@@ -96,24 +107,27 @@ exist in this repo are reused, not duplicated (single source of truth):
 
 ```
 tello_mcp/
-├── server.py     # MCP server init (low-level Server) + lifespan + single control thread
-├── resources.py  # read-only Resources (telemetry/observation/status)
+├── server.py     # MCP server (low-level Server) + the tool table → HTTP forwarder
+├── resources.py  # read-only Resources (telemetry/observation/status) over HTTP
 └── README.md
-#  tools  →  root tools.py      (the shared registry — "actions")
-#  sdk    →  tello_tools/       (the real drone/safety stack — "drone_sdk")
-#  config →  root config.py     (env-overridable caps; no separate .env)
+#  REST target → web/server.py   (the process that owns the drone)
+#  TELLO_WEB_URL  selects it      (default http://localhost:8000)
 ```
 
 ## Run
 
-From the project root (root-relative imports — don't run from inside `tello_mcp/`):
+Start the **web server first** (it owns the drone), then this proxy. From the project root
+(root-relative imports — don't run from inside `tello_mcp/`):
 
 ```bash
-uv run python -m tello_mcp.server
+uv run python -m web.server                              # terminal 1: owns the Tello
+uv run python -m tello_mcp.server                        # terminal 2: the MCP proxy
+TELLO_WEB_URL=http://spark:8000 uv run python -m tello_mcp.server   # or point at a remote host
 ```
 
-Logs go to **stderr** (stdout is the MCP transport). It connects to the drone first; if
-UDP 8889 is busy, free the stale process (`pkill -f 'web.server|tello_mcp'`) and retry.
+Logs go to **stderr** (stdout is the MCP transport). On startup it probes the web server
+and warns if it's unreachable; tools error until the server is up. No UDP-port conflict —
+it can run at the same time as `web.server`.
 
 ### Register with an MCP client (e.g. Claude Code)
 

@@ -24,7 +24,7 @@
   #video { width:100%; border-radius:6px; background:#000; display:block; }
   /* ── HUD overlay on the live feed (corner brackets + reticle) ─────────────── */
   .viewport { position:relative; line-height:0; }
-  .hud { position:absolute; inset:0; pointer-events:none; z-index:2; }
+  .hud { position:absolute; inset:0; pointer-events:none; z-index:2; line-height:normal; }
   .hud .corner { position:absolute; width:24px; height:24px;
                  border:2px solid var(--accent); opacity:.65; filter:drop-shadow(var(--glow)); }
   .hud .tl { top:10px; left:10px;  border-right:0; border-bottom:0; }
@@ -43,7 +43,7 @@
   .hud .tag::before { content:"● "; color:var(--err); animation:blink 1.4s steps(1) infinite; }
   @keyframes blink { 50% { opacity:.15; } }
   .hud .readout { position:absolute; left:14px; bottom:38px; display:flex; flex-direction:column;
-                  gap:3px; font-size:11px; letter-spacing:1px; }
+                  gap:7px; font-size:11px; letter-spacing:1px; }
   .hud .readout span { display:flex; gap:8px; }
   .hud .readout i { display:inline-block; width:30px; color:var(--dim); font-style:normal; }
   .hud .readout b { color:var(--accent); text-shadow:var(--glow); font-weight:700; }
@@ -123,7 +123,7 @@
     <div class="help">
       Click the video first (to capture keys). Control pauses while you type in the goal/detect boxes.
       <b>W/S</b> fwd/back · <b>A/D</b> strafe · <b>↑/↓</b> up/down · <b>←/→</b> yaw ·
-      <b>T</b> takeoff · <b>L</b> land · <b>P</b> snapshot · <b>Esc</b> emergency
+      <b>T</b> takeoff · <b>L</b> land · <b>P</b> snapshot · <b>3</b> 3D-snapshot · <b>Esc</b> emergency
     </div>
   </section>
 
@@ -131,11 +131,8 @@
     <div class="panel">
       <h3>Telemetry</h3>
       <div class="grid" id="tel">
-        <span class="k">Battery</span><span class="v" id="battery">—</span>
-        <span class="k">Height</span><span class="v" id="height">—</span>
         <span class="k">Stream fps</span><span class="v" id="fps">—</span>
         <span class="k">Pos (cm)</span><span class="v" id="pos">—</span>
-        <span class="k">Heading</span><span class="v" id="heading">—</span>
         <span class="k">Flying</span><span class="v" id="flying">—</span>
         <span class="k">Detections</span><span class="v" id="detn">—</span>
         <span class="k">Det fps</span><span class="v" id="detfps">—</span>
@@ -149,7 +146,7 @@
         <button onclick="cmd('land')">Land (L)</button>
         <button id="toggle" onclick="toggleMode()">Arm AUTO</button>
         <button onclick="cmd('snapshot')">Snapshot</button>
-        <button onclick="snapshot3d()" title="Queue the current frame for 3D reconstruction">3D Snapshot</button>
+        <button onclick="snapshot3d()" title="Queue the current frame for 3D reconstruction">3D Snapshot (3)</button>
         <button id="geofence-btn" onclick="toggleGeofence()"
                 title="Lift the geofence so the agent can leave the room / cross doorways">Geofence: —</button>
         <button id="estop" onclick="estop()">■ EMERGENCY STOP (Esc)</button>
@@ -469,11 +466,8 @@ function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
 function renderStatus(s) {
   if (s.mode && s.mode !== mode) setMode(s.mode);
   const set = (id, v) => $(id).textContent = (v === undefined || v === null) ? "—" : v;
-  set("battery", s.battery !== undefined ? s.battery + "%" : "—");
-  set("height", s.height_cm !== undefined ? s.height_cm + " cm" : "—");
   set("fps", s.stream_fps);
   set("pos", s.pos ? `${s.pos[0]}, ${s.pos[1]}` : "—");
-  set("heading", s.heading !== undefined ? s.heading + "°" : "—");
   set("flying", s.flying === undefined ? "—" : (s.flying ? "yes" : "no"));
   set("detn", s.det_n);
   set("detfps", s.det_fps);
@@ -496,7 +490,6 @@ function renderStatus(s) {
   set("hud-hdg", s.heading !== undefined ? s.heading + "°" : "—");
   set("hud-bat", s.battery !== undefined ? s.battery + "%" : "—");
   $("hud-bat").style.color = (s.battery <= 20) ? "var(--err)" : "var(--accent)";
-  $("battery").style.color = (s.battery <= 20) ? "var(--err)" : "var(--txt)";
   // drone readiness (distinct from the websocket connection)
   if (s.error) { $("conn").textContent = "● " + s.error; $("conn").style.color = "var(--err)"; }
   else if (s.ready) { $("conn").textContent = "● tello connected"; $("conn").style.color = "var(--ok)"; }
@@ -600,6 +593,7 @@ addEventListener("keydown", e => {
   if (k === "t") { cmd("takeoff"); return; }
   if (k === "l") { cmd("land"); return; }
   if (k === "p") { cmd("snapshot"); return; }    // P → snapshot (with metadata sidecar)
+  if (k === "3") { snapshot3d(); return; }        // 3 → queue frame for 3D reconstruction
   if (MOVE.includes(k)) { e.preventDefault(); if (!keys.has(k)) { keys.add(k); pushVec(); } }
 });
 addEventListener("keyup", e => {

@@ -15,6 +15,7 @@ Phase B lands. The AUTO mode is a no-op until the Phase E agent loop drives it.
 
 import asyncio
 import collections
+import concurrent.futures
 import errno
 import os
 import queue
@@ -24,7 +25,7 @@ from contextlib import asynccontextmanager
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -44,11 +45,15 @@ from tello_tools.safety import SafeTello, SafetyError
 from tools import ToolContext, build_registry
 
 # ── shared state (written by the control thread, read by handlers) ────────────
+# Each queue item is (name, args, future): the future is None for fire-and-forget
+# callers (the WebSocket UI) and a concurrent.futures.Future for REST callers that
+# need the command's result/error back. The control thread resolves it.
 _cmd_q: "queue.Queue[tuple]" = queue.Queue()
 _manual_vec = (0, 0, 0, 0)        # (lr, fb, ud, yaw) in {-1,0,1}; reassigned atomically
 _status: dict = {"ready": False}
 _log: collections.deque = collections.deque(maxlen=300)
 _goal: str | None = None
+_mission: dict = {}               # latest mission triggered via POST /mission (id, goal, ts)
 _stop = threading.Event()
 _craft_busy = threading.Lock()  # guards against overlapping "craft 3D model" runs
 
@@ -59,6 +64,22 @@ def log(msg: str) -> None:
     line = f"[{time.strftime('%H:%M:%S')}] {msg}"
     _log.append(line)
     print(line, flush=True)
+
+
+def _enqueue(name: str, args: tuple = ()) -> None:
+    """Fire-and-forget: drop a command on the control thread, don't wait (WS path)."""
+    _cmd_q.put((name, tuple(args), None))
+
+
+def _call(name: str, args: tuple = (), timeout: float = 10.0):
+    """Enqueue a command and block until the control thread returns its result.
+
+    Raises whatever the handler raised (SafetyError / ArbiterBlocked / …) or
+    concurrent.futures.TimeoutError if the control thread never serviced it.
+    """
+    fut: concurrent.futures.Future = concurrent.futures.Future()
+    _cmd_q.put((name, tuple(args), fut))
+    return fut.result(timeout=timeout)
 
 
 # ── control thread: the only place the drone is actuated ──────────────────────
@@ -98,13 +119,26 @@ def _control_loop() -> None:
     last_tel = 0.0
     low_batt_warned = False
     while not _stop.is_set():
-        # 1) discrete commands
+        # 1) discrete commands — resolve the caller's future (REST) or log (WS)
         while True:
             try:
-                name, args = _cmd_q.get_nowait()
+                name, args, fut = _cmd_q.get_nowait()
             except queue.Empty:
                 break
-            _handle_cmd(arb, c, name, args)
+            try:
+                res = _handle_cmd(arb, c, name, args)
+                if fut is not None:
+                    fut.set_result(res)
+            except (SafetyError, ArbiterBlocked) as e:
+                if fut is not None:
+                    fut.set_exception(e)
+                else:
+                    log(f"refused: {e}")
+            except Exception as e:
+                if fut is not None:
+                    fut.set_exception(e)
+                else:
+                    log(f"command error: {e}")
 
         # 2) drive: operator sticks always win; otherwise AUTO servoes (Phase D)
         if safe.flying:
@@ -165,69 +199,84 @@ def _control_loop() -> None:
     log("Drone disconnected, UDP ports released.")
 
 
-def _handle_cmd(arb: ControlArbiter, c: TelloController, name: str, args: tuple) -> None:
-    try:
-        if name == "takeoff":
-            arb.manual_takeoff(); log("Takeoff")
-        elif name == "land":
-            arb.manual_land(); log("Land")
-        elif name == "mode":
-            (arb.arm_auto if args[0] == "AUTO" else arb.to_manual)()
-            log(f"Mode → {args[0]}")
-            if args[0] == "AUTO":
-                brain = _sys.get("brain")
-                w = _sys.get("perception")
-                has_goal = brain is not None and brain.active
-                has_target = w is not None and bool(w.queries)
-                if not has_goal and not has_target:
-                    log("AUTO armed but there's no Goal and no Detect target — the drone "
-                        "will just hover. Send a Goal (then it searches/approaches) or type "
-                        "a Detect query (then it servoes toward it).")
-                elif not arb.safe.flying:
-                    log("AUTO armed with a mission but the drone isn't airborne — press "
-                        "Takeoff to start flying it.")
-        elif name == "emergency":
-            arb.emergency(); log("EMERGENCY STOP")
-        elif name == "geofence":
-            on = bool(args[0])
-            arb.set_geofence(on)
-            if on:
-                log(f"Geofence RE-ARMED (radius {config.GEOFENCE_RADIUS_CM}cm from takeoff).")
-            else:
-                log("⚠ Geofence DISABLED — the agent may now leave the room / cross doorways. "
-                    "No obstacle avoidance exists; fly low/slow with E-STOP in reach.")
-        elif name == "snapshot":
-            fn = take_snapshot(c, "manual", dest_dir=config.CAPTURES_DIR); log(f"Snapshot: {fn}")
-        elif name == "cenital":
-            fn = take_snapshot(c, "cenital")
-            if fn is None:
-                log("Cenital: no frame yet — is the stream up?")
-            else:
-                floor = bool(args[0]) if args else False
-                log(f"Cenital: snapshot {fn} — generating BEV (floor-seg={floor})…")
-                # BEV is CPU work (warp + seg); run off the control thread so it
-                # never starves flight. It only reads the saved file, no drone I/O.
-                threading.Thread(target=_make_cenital, args=(fn, floor), daemon=True).start()
-        elif name == "snapshot_3d":
-            fn = take_snapshot(c, "snap3d", dest_dir=config.PENDING_SNAPSHOT_DIR)
-            if fn is None:
-                log("3D-snapshot: no frame yet — is the stream up?")
-            else:
-                n = len(list_pending_images())
-                log(f"3D-snapshot: {fn} ({n} image(s) pending reconstruction)")
-                _status["model3d"] = {"pending": n, "ts": int(time.time() * 1000)}
-        elif name == "goal":
-            global _goal
-            _goal = args[0]
+def _handle_cmd(arb: ControlArbiter, c: TelloController, name: str, args: tuple):
+    """Execute one discrete command on the control thread, returning a result string.
+
+    Does NOT catch SafetyError / ArbiterBlocked — the drain loop in `_control_loop`
+    handles them (logging for WS callers, surfacing them on the future for REST).
+    """
+    if name == "takeoff":
+        arb.manual_takeoff(); log("Takeoff"); return "took off"
+    elif name == "land":
+        arb.manual_land(); log("Land"); return "landed"
+    elif name == "move":
+        arb.agent_move(args[0], int(args[1]))
+        log(f"Move {args[0]} {args[1]}cm"); return f"moved {args[0]} {args[1]}cm"
+    elif name == "rotate":
+        arb.agent_rotate(int(args[0]))
+        log(f"Rotate {args[0]}deg"); return f"rotated {args[0]}deg"
+    elif name == "mode":
+        (arb.arm_auto if args[0] == "AUTO" else arb.to_manual)()
+        log(f"Mode → {args[0]}")
+        if args[0] == "AUTO":
             brain = _sys.get("brain")
-            if brain is not None:
-                brain.start_mission(args[0])             # arms the mission; Arm AUTO to fly it
-            else:
-                log(f"Goal stored: {args[0]!r} (brain still loading)")
-    except (SafetyError, ArbiterBlocked) as e:
-        log(f"refused: {e}")
-    except Exception as e:
-        log(f"command error: {e}")
+            w = _sys.get("perception")
+            has_goal = brain is not None and brain.active
+            has_target = w is not None and bool(w.queries)
+            if not has_goal and not has_target:
+                log("AUTO armed but there's no Goal and no Detect target — the drone "
+                    "will just hover. Send a Goal (then it searches/approaches) or type "
+                    "a Detect query (then it servoes toward it).")
+            elif not arb.safe.flying:
+                log("AUTO armed with a mission but the drone isn't airborne — press "
+                    "Takeoff to start flying it.")
+        return f"mode → {args[0]}"
+    elif name == "emergency":
+        arb.emergency(); log("EMERGENCY STOP"); return "EMERGENCY STOP"
+    elif name == "geofence":
+        on = bool(args[0])
+        arb.set_geofence(on)
+        if on:
+            log(f"Geofence RE-ARMED (radius {config.GEOFENCE_RADIUS_CM}cm from takeoff).")
+        else:
+            log("⚠ Geofence DISABLED — the agent may now leave the room / cross doorways. "
+                "No obstacle avoidance exists; fly low/slow with E-STOP in reach.")
+        return f"geofence {'on' if on else 'off'}"
+    elif name == "snapshot":
+        label = args[0] if args else "manual"
+        fn = take_snapshot(c, label, dest_dir=config.CAPTURES_DIR)
+        log(f"Snapshot: {fn}"); return fn
+    elif name == "cenital":
+        fn = take_snapshot(c, "cenital")
+        if fn is None:
+            log("Cenital: no frame yet — is the stream up?")
+        else:
+            floor = bool(args[0]) if args else False
+            log(f"Cenital: snapshot {fn} — generating BEV (floor-seg={floor})…")
+            # BEV is CPU work (warp + seg); run off the control thread so it
+            # never starves flight. It only reads the saved file, no drone I/O.
+            threading.Thread(target=_make_cenital, args=(fn, floor), daemon=True).start()
+        return fn
+    elif name == "snapshot_3d":
+        fn = take_snapshot(c, "snap3d", dest_dir=config.PENDING_SNAPSHOT_DIR)
+        if fn is None:
+            log("3D-snapshot: no frame yet — is the stream up?")
+        else:
+            n = len(list_pending_images())
+            log(f"3D-snapshot: {fn} ({n} image(s) pending reconstruction)")
+            _status["model3d"] = {"pending": n, "ts": int(time.time() * 1000)}
+        return fn
+    elif name == "goal":
+        global _goal
+        _goal = args[0]
+        brain = _sys.get("brain")
+        if brain is not None:
+            brain.start_mission(args[0])             # arms the mission; Arm AUTO to fly it
+        else:
+            log(f"Goal stored: {args[0]!r} (brain still loading)")
+        return f"goal set: {args[0]!r}"
+    else:
+        raise ValueError(f"unknown command {name!r}")
 
 
 def _make_cenital(image_path: str, floor_seg: bool) -> None:
@@ -324,6 +373,9 @@ def _run_agent(arb: ControlArbiter, c: TelloController, brain: AgentBrain) -> No
     elif kind == "snapshot":
         fn = brain.tools["take_snapshot"].run({"label": act[1]})
         log(f"[brain] snapshot saved: {fn}")
+        if fn:                                  # expose it over GET /mission/photo for the Mac
+            _status["mission_photo"] = {"path": fn, "ts": int(time.time() * 1000),
+                                        "mission_id": _mission.get("id"), "label": act[1]}
     else:                                   # "hover" / "done"
         arb.agent_hover()
 
@@ -461,11 +513,11 @@ def _handle_client(msg: dict) -> None:
         _manual_vec = (msg.get("lr", 0), msg.get("fb", 0),
                        msg.get("ud", 0), msg.get("yaw", 0))
     elif t == "cmd":
-        _cmd_q.put((msg["name"], tuple(msg.get("args", []))))
+        _enqueue(msg["name"], tuple(msg.get("args", [])))
     elif t == "mode":
-        _cmd_q.put(("mode", (msg["value"],)))
+        _enqueue("mode", (msg["value"],))
     elif t == "goal":
-        _cmd_q.put(("goal", (msg["text"],)))
+        _enqueue("goal", (msg["text"],))
     elif t == "queries":
         w = _sys.get("perception")
         if w is not None:
@@ -477,11 +529,186 @@ def _handle_client(msg: dict) -> None:
             w.set_queries(list(COCO_CLASSES))
             log(f"Detect queries: ALL ({len(COCO_CLASSES)} COCO classes)")
     elif t == "emergency":
-        _cmd_q.put(("emergency", ()))
+        _enqueue("emergency", ())
     elif t == "snapshot_3d":
-        _cmd_q.put(("snapshot_3d", ()))  # needs the drone (captures a frame)
+        _enqueue("snapshot_3d", ())  # needs the drone (captures a frame)
     elif t == "craft_3d":
         _start_craft()  # drone-independent — dispatch directly, not via the control thread
+
+
+# ── REST control surface ──────────────────────────────────────────────────────
+# A thin HTTP API so an external orchestrator (the Mac agent, or the tello_mcp
+# proxy) can send goals and drive the drone without a WebSocket. Handlers only
+# enqueue onto the control thread (`_call`/`_enqueue`) or read `_status` — they
+# never touch djitellopy directly, so they can't starve the video decoder.
+def _run_cmd(name: str, args: tuple = (), timeout: float = 10.0):
+    """Run a control-thread command for a REST handler, mapping failures to HTTP."""
+    if _sys.get("arb") is None:
+        raise HTTPException(503, _status.get("error") or "drone not ready")
+    try:
+        return _call(name, args, timeout)
+    except (SafetyError, ArbiterBlocked) as e:
+        raise HTTPException(409, str(e)) from e         # refused by a safety guard / mode gate
+    except concurrent.futures.TimeoutError as e:
+        raise HTTPException(504, "command timed out — drone busy or unreachable") from e
+    except HTTPException:
+        raise
+    except Exception as e:                              # noqa: BLE001 — surface the message
+        raise HTTPException(500, str(e)) from e
+
+
+# --- mission lifecycle (the orchestrator's main path) ------------------------
+@app.post("/mission", status_code=202)
+def post_mission(body: dict) -> dict:
+    """Start an autonomous mission: goal → arm AUTO → takeoff. Returns immediately;
+    the mission runs for seconds on the control thread (poll GET /mission/status)."""
+    goal = (body.get("goal") or "").strip()
+    if not goal:
+        raise HTTPException(422, "missing 'goal'")
+    if _sys.get("arb") is None:
+        raise HTTPException(503, _status.get("error") or "drone not ready")
+    global _mission
+    mid = f"m_{int(time.time() * 1000)}"
+    _mission = {"id": mid, "goal": goal, "ts": int(time.time() * 1000)}
+    _status.pop("mission_photo", None)                 # clear the previous mission's photo
+    _enqueue("goal", (goal,))                          # async: same sequence as the WS UI
+    _enqueue("mode", ("AUTO",))
+    _enqueue("takeoff", ())
+    log(f"[rest] mission {mid} started: {goal!r}")
+    return {"mission_id": mid, "goal": goal, "ts": _mission["ts"]}
+
+
+@app.get("/mission/status")
+def mission_status() -> dict:
+    """Mission blackboard for polling — phase == 'done' means the goal is satisfied."""
+    mission = _status.get("mission", {}) or {}
+    photo = _status.get("mission_photo") or {}
+    has_photo = bool(photo.get("path") and os.path.exists(photo["path"]))
+    return {
+        "mission_id": _mission.get("id"),
+        "ready": _status.get("ready", False),
+        "error": _status.get("error"),
+        "goal": _status.get("goal"),
+        "phase": mission.get("phase"),
+        "mission": mission,
+        "photo_available": has_photo,
+        "photo_ts": photo.get("ts") if has_photo else None,
+    }
+
+
+@app.get("/mission/photo")
+def mission_photo() -> Response:
+    """Download the latest snapshot the mission captured (404 until one exists)."""
+    photo = _status.get("mission_photo") or {}
+    path = photo.get("path")
+    if not path or not os.path.exists(path):
+        return Response(status_code=404)
+    return FileResponse(path, media_type="image/jpeg",
+                        filename=os.path.basename(path))
+
+
+# --- fine-grained control (so the MCP proxy keeps full control) --------------
+@app.post("/control/takeoff")
+def control_takeoff() -> dict:
+    return {"result": _run_cmd("takeoff")}
+
+
+@app.post("/control/land")
+def control_land() -> dict:
+    return {"result": _run_cmd("land")}
+
+
+@app.post("/control/mode")
+def control_mode(body: dict) -> dict:
+    mode = str(body.get("mode", "")).upper()
+    if mode not in ("AUTO", "MANUAL"):
+        raise HTTPException(422, "mode must be 'AUTO' or 'MANUAL'")
+    return {"result": _run_cmd("mode", (mode,))}
+
+
+@app.post("/control/move")
+def control_move(body: dict) -> dict:
+    direction = body.get("direction")
+    cm = body.get("cm")
+    if direction not in ("forward", "back", "left", "right", "up", "down") or cm is None:
+        raise HTTPException(422, "need direction (forward/back/left/right/up/down) and cm")
+    return {"result": _run_cmd("move", (direction, int(cm)))}
+
+
+@app.post("/control/rotate")
+def control_rotate(body: dict) -> dict:
+    if body.get("deg") is None:
+        raise HTTPException(422, "need 'deg' (negative = counter-clockwise)")
+    return {"result": _run_cmd("rotate", (int(body["deg"]),))}
+
+
+@app.post("/control/emergency")
+def control_emergency() -> dict:
+    return {"result": _run_cmd("emergency")}
+
+
+@app.post("/control/geofence")
+def control_geofence(body: dict) -> dict:
+    return {"result": _run_cmd("geofence", (bool(body.get("on", True)),))}
+
+
+@app.post("/control/snapshot")
+def control_snapshot(body: dict | None = None) -> dict:
+    label = (body or {}).get("label", "manual")
+    fn = _run_cmd("snapshot", (label,))
+    if fn is None:
+        raise HTTPException(503, "no frame yet — is the stream up?")
+    return {"result": fn}
+
+
+@app.post("/control/target")
+def control_target(body: dict) -> dict:
+    """Set the open-vocabulary detector queries (deterministic servoing target)."""
+    tools = _sys.get("tools")
+    if tools is None:
+        raise HTTPException(503, "brain/detector not ready")
+    queries = body.get("queries", [])
+    return {"result": tools["set_target"].run({"queries": queries})}
+
+
+@app.post("/mission/done")
+def mission_done(body: dict | None = None) -> dict:
+    """Declare the current goal satisfied (sets phase=done, disarms the mission)."""
+    tools = _sys.get("tools")
+    if tools is None:
+        raise HTTPException(503, "brain not ready")
+    return {"result": tools["report_done"].run({"reason": (body or {}).get("reason", "")})}
+
+
+# --- read-only telemetry / state (thread-safe; no control thread needed) -----
+@app.get("/telemetry")
+def get_telemetry_route() -> dict:
+    c = _sys.get("controller")
+    if c is None:
+        raise HTTPException(503, _status.get("error") or "drone not ready")
+    return get_telemetry(c)
+
+
+@app.get("/pose")
+def get_pose_route() -> dict:
+    arb = _sys.get("arb")
+    if arb is None:
+        raise HTTPException(503, "drone not ready")
+    return {"x": arb.safe.x, "y": arb.safe.y, "heading": arb.safe.heading}
+
+
+@app.get("/observation")
+def get_observation_route() -> dict:
+    tools = _sys.get("tools")
+    if tools is None:
+        raise HTTPException(503, "brain/detector not ready")
+    return tools["get_observation"].run({})
+
+
+@app.get("/status")
+def get_status_route() -> dict:
+    """Full HUD snapshot (mode, flying, battery, detections, mission, …)."""
+    return _status
 
 
 # mount static after routes so "/" stays our handler

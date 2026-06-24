@@ -119,18 +119,18 @@ ODM_POLL_INTERVAL_S = float(os.getenv("ODM_POLL_INTERVAL_S", "3.0"))
 #
 
 # feature-quality: resolution at which image features are extracted.
-ODM_FEATURE_QUALITY = "high"  # ultra | high | medium | low | lowest
-#ODM_FEATURE_QUALITY = "ultra"          # max quality
+# ODM_FEATURE_QUALITY = "high"  # ultra | high | medium | low | lowest
+ODM_FEATURE_QUALITY = "ultra"          # max quality
 
 # min-num-features: minimum features extracted per image (more → easier matching).
-ODM_MIN_NUM_FEATURES = 10000
-#ODM_MIN_NUM_FEATURES = 50000           # max quality
+# ODM_MIN_NUM_FEATURES = 10000
+ODM_MIN_NUM_FEATURES = 50000           # max quality
 
 # pc-geometric: extra geometric filtering of the dense point cloud (drops the
 # spurious points that often abort OpenMVS densification, e.g. error 134).
-ODM_PC_GEOMETRIC = False
-#ODM_PC_GEOMETRIC = True                 # max quality
+# ODM_PC_GEOMETRIC = False
+ODM_PC_GEOMETRIC = True                 # max quality
 
 # pc-quality: density of the final point cloud.
-ODM_PC_QUALITY = "medium"  # ultra | high | medium | low | lowest
-#ODM_PC_QUALITY = "ultra"               # max quality
+# ODM_PC_QUALITY = "medium"  # ultra | high | medium | low | lowest
+ODM_PC_QUALITY = "ultra"               # max quality
