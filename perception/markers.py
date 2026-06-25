@@ -30,7 +30,7 @@ import numpy as np
 # white floor is rejected. Saturation is the real discriminator against the floor — raise
 # its floor if the floor leaks in, lower the V floor if shadowed markers drop out.
 _SPECS: dict[str, list[tuple[tuple[int, int, int], tuple[int, int, int]]]] = {
-    "orange": [((5, 80, 70), (22, 255, 255))],
+    "orange": [((5, 140, 60), (20, 255, 255))],
 }
 
 # query keywords (English + Spanish) that select a colour spec instead of YOLO
@@ -39,12 +39,23 @@ _KEYWORDS: dict[str, str] = {
     "naranja": "orange",
 }
 
-# blob acceptance, as fractions of the frame area (resolution-independent)
-_MIN_AREA_FRAC = 3e-4    # reject specks / sensor noise
-_MAX_AREA_FRAC = 0.15    # reject a large orange object filling the view (not a marker)
-_MIN_ASPECT = 0.35       # bbox w/h must be roughly square-ish (angled view tolerated)
-_MAX_ASPECT = 2.8
-_MIN_FILL = 0.30         # mask pixels / bbox area — squares are solid; rejects thin streaks
+# Blob acceptance. The previous laxer set fired on skin (warm-lit faces read as
+# low-saturation orange), beige floor and corners. Two layers reject those now:
+#  1. a HIGH saturation floor (above) — measured markers read S≈223-249, while skin
+#     and wood sit below ~140, so saturation alone removes most false positives;
+#  2. ROTATION-INVARIANT shape gates — squareness (contour vs its min-area rect) and
+#     solidity (contour vs convex hull) reject irregular/concave blobs (a head outline,
+#     a corner, a cable) that a plain aspect/fill test let through.
+# Thresholds were tuned against real captures (manual_2026062*) where the four markers
+# measured aspect 1.8-2.8 (perspective foreshortening — hence the loose MAX_ASPECT),
+# fill 0.63-0.75, rect-fill 0.66-0.83, solidity 0.95-0.98, all at S≥223.
+_MIN_AREA_FRAC = 3e-4    # reject specks / sensor noise (too small to be a real marker)
+_MAX_AREA_FRAC = 0.10    # reject a large orange object filling the view (not a marker)
+_MIN_ASPECT = 0.4        # bbox w/h band — markers foreshorten to ~2-3:1 rectangles when
+_MAX_ASPECT = 3.2        # viewed from the side, so the band must be generous
+_MIN_FILL = 0.35         # mask pixels / bbox area — light gate against thin streaks
+_MIN_RECT_FILL = 0.60    # contour area / min-area-rect area — squareness, rotation-invariant
+_MIN_SOLIDITY = 0.85     # contour area / convex-hull area — rejects concave/irregular shapes
 
 
 def is_marker_query(query: str) -> bool:
@@ -75,7 +86,8 @@ def detect(frame: np.ndarray, specs: list[tuple[str, list]]) -> list[dict]:
     h, w = frame.shape[:2]
     frame_area = float(w * h)
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    close_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))  # bridge the black bands
+    open_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))     # drop isolated speckle
 
     out: list[dict] = []
     for label, ranges in specs:
@@ -83,27 +95,43 @@ def detect(frame: np.ndarray, specs: list[tuple[str, list]]) -> list[dict]:
         for lo, hi in ranges:
             m = cv2.inRange(hsv, np.array(lo, np.uint8), np.array(hi, np.uint8))
             mask = m if mask is None else cv2.bitwise_or(mask, m)
-        # close gaps where black bands split the orange into fragments, then open
-        # to drop isolated speckle
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+        # close gaps where the black bands split the orange into fragments (a marker must
+        # become ONE solid blob so the squareness/solidity gates judge the whole square),
+        # then a light open to drop isolated speckle
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, close_k, iterations=2)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, open_k, iterations=1)
 
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for c in contours:
             x, y, bw, bh = cv2.boundingRect(c)
+            if not bw or not bh:
+                continue
             area_frac = (bw * bh) / frame_area
             if area_frac < _MIN_AREA_FRAC or area_frac > _MAX_AREA_FRAC:
                 continue
-            aspect = bw / float(bh) if bh else 0.0
+            aspect = bw / float(bh)
             if not (_MIN_ASPECT <= aspect <= _MAX_ASPECT):
                 continue
-            fill = cv2.contourArea(c) / float(bw * bh) if bw and bh else 0.0
-            if fill < _MIN_FILL:
+            area = cv2.contourArea(c)
+            if area / float(bw * bh) < _MIN_FILL:                 # bbox fill — cheap pre-gate
+                continue
+            # squareness, rotation-invariant: a real (possibly angled) square fills its
+            # minimum-area rect well; an irregular blob does not.
+            (_rcx, _rcy), (rw, rh), _ang = cv2.minAreaRect(c)
+            rect_area = rw * rh
+            rect_fill = area / rect_area if rect_area else 0.0
+            if rect_fill < _MIN_RECT_FILL:
+                continue
+            # solidity: rejects concave/lumpy outlines (a head silhouette, a corner) that
+            # may still pass the rect test — a solid square's hull ≈ itself.
+            hull_area = cv2.contourArea(cv2.convexHull(c))
+            solidity = area / hull_area if hull_area else 0.0
+            if solidity < _MIN_SOLIDITY:
                 continue
             x1, y1, x2, y2 = float(x), float(y), float(x + bw), float(y + bh)
             out.append({
                 "label": label,
-                "score": float(min(1.0, fill)),      # solid square ⇒ high score
+                "score": float(min(1.0, rect_fill)),  # squareness ⇒ confidence
                 "box": (x1, y1, x2, y2),
                 "center": ((x1 + x2) / 2, (y1 + y2) / 2),
                 "area_frac": area_frac,

@@ -40,8 +40,10 @@ _CLIMB_TOL_CM = 10       # survey altitude counts as reached within this of the 
 _DEFAULT_MARKER_COUNT = 4  # how many colour markers a survey frames at once when unspecified
 
 # ── in-room search pattern (within the geofence; never leaves the room) ───────
-_SEARCH_YAW_STEP = 30        # degrees per discrete turn while sweeping a vantage
-_SEARCH_DWELL_S = 0.7        # hold after each turn/step so the detector scans the new view
+_SEARCH_YAW_STEP = 15        # degrees per discrete turn while sweeping a vantage; small so the
+                             # narrow heading window where ALL markers co-appear isn't skipped
+_SEARCH_DWELL_S = 1.2        # hold after each turn/step so the drone settles and the detector
+                             # gets a stable frame before the next turn (avoid a rushed sweep)
 _SEARCH_STEP_CM = config.MAX_STEP_CM   # translation between vantage points
 _SEARCH_MAX_VANTAGES = 4     # vantage points to try before giving up (room swept)
 _SEARCH_DIRS = ("forward", "right", "back", "left")  # cycle so a blocked dir doesn't stall
@@ -66,11 +68,14 @@ def _target_height_cm(goal: str) -> int | None:
     g = goal.lower()
     if not re.search(r"sub[ei]|asciend|elev|altura|alto|rise|climb|height|up to|hover at", g):
         return None
-    if m := re.search(r"(\d)\s*[.,']\s*(\d)\s*m\b", g):       # 1.9 m / 1,9m / 1'9 m
-        h = int(m.group(1)) * 100 + int(m.group(2)) * 10
-    elif (m := re.search(r"(\d{2,3})\s*cm\b", g)):            # 190 cm
+    _m = r"m(?:et(?:er|ro)s?)?"   # m / meter(s) / metro(s)
+    # Decimal metres FIRST and as a real decimal — '1,80 m' = 1.80 m = 180 cm (the prior
+    # one-digit-only version fell through to the integer branch and mis-parsed '0 m' → 0).
+    if m := re.search(rf"(\d+)\s*[.,']\s*(\d+)\s*{_m}\b", g):   # 1,80 m / 1.9 m / 1'9m
+        h = round(float(f"{m.group(1)}.{m.group(2)}") * 100)
+    elif m := re.search(r"(\d{2,3})\s*cm\b", g):               # 190 cm
         h = int(m.group(1))
-    elif (m := re.search(r"(\d)\s*m\b", g)):                  # 2 m
+    elif m := re.search(rf"\b(\d)\s*{_m}\b", g):               # 2 m (lone integer metres)
         h = int(m.group(1)) * 100
     else:
         return None
