@@ -40,7 +40,7 @@ _CLIMB_TOL_CM = 10       # survey altitude counts as reached within this of the 
 _DEFAULT_MARKER_COUNT = 4  # how many colour markers a survey frames at once when unspecified
 
 # ── in-room search pattern (within the geofence; never leaves the room) ───────
-_SEARCH_YAW_STEP = 15        # degrees per discrete turn while sweeping a vantage; small so the
+_SEARCH_YAW_STEP = 10        # degrees per discrete turn while sweeping a vantage; small so the
                              # narrow heading window where ALL markers co-appear isn't skipped
 _SEARCH_DWELL_S = 1.2        # hold after each turn/step so the drone settles and the detector
                              # gets a stable frame before the next turn (avoid a rushed sweep)
