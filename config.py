@@ -25,7 +25,7 @@ SPEED = 40  # cm/s for rc control (manual + servoing); keep low indoors
 KEEPALIVE_S = 5  # send a zero-rc heartbeat at least this often
 
 # ── safety caps (SafeTello enforces these) ──────────────────────────────────
-MAX_HEIGHT_CM = 180  # refuse ascend commands above this
+MAX_HEIGHT_CM = 200  # refuse ascend commands above this (≥190 to allow the ~1.9 m survey vantage)
 MIN_HEIGHT_CM = 30  # don't descend below this while flying
 GEOFENCE_RADIUS_CM = 200  # dead-reckoning box radius from takeoff point
 MAX_STEP_CM = 50  # largest single discrete move

@@ -17,6 +17,7 @@ rule (djitellopy isn't safe for concurrent sends).
 """
 
 import math
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -25,6 +26,7 @@ import config
 from agent import state as S
 from agent.servoing import Servoer
 from brain.prompts import SEARCH_HINTS as _SEARCH_HINTS
+from perception import markers
 
 # Actions returned by fast_step for the control thread to execute:
 #   ("rc", lr, fb, ud, yaw) | ("rotate", deg) | ("move", direction, cm)
@@ -34,6 +36,8 @@ Action = tuple
 _LOST_LIMIT = 25         # fast-ticks with no detection before approach → search
 _APPROACH_COAST_S = 0.4  # keep servoing toward the last box through brief detection dropouts
 _WATCH_LEAVE_S = 3.0     # sustained absence (after a subject appeared) that ends a watch step
+_CLIMB_TOL_CM = 10       # survey altitude counts as reached within this of the target height
+_DEFAULT_MARKER_COUNT = 4  # how many colour markers a survey frames at once when unspecified
 
 # ── in-room search pattern (within the geofence; never leaves the room) ───────
 _SEARCH_YAW_STEP = 30        # degrees per discrete turn while sweeping a vantage
@@ -41,6 +45,62 @@ _SEARCH_DWELL_S = 0.7        # hold after each turn/step so the detector scans t
 _SEARCH_STEP_CM = config.MAX_STEP_CM   # translation between vantage points
 _SEARCH_MAX_VANTAGES = 4     # vantage points to try before giving up (room swept)
 _SEARCH_DIRS = ("forward", "right", "back", "left")  # cycle so a blocked dir doesn't stall
+
+
+# ── deterministic step normalization (don't trust the VLM to emit the right fields) ──
+# gemma3 frequently drops `count`/`approach` on a marker survey and forgets the climb, so
+# the mission would approach the first marker instead of rotating, and never gain altitude.
+# We re-derive these directly from the goal text, which is reliable.
+def _markers_wanted(goal: str) -> int:
+    """How many colour markers the goal asks to frame at once. Reads an integer that
+    qualifies the marker noun ("los 4 cuadrados", "all 4 markers"); defaults to 4. The
+    '\\d+ <marker-noun>' shape avoids picking up an altitude like '1.9 m'."""
+    m = re.search(r"(\d+)\s+\w*\s*(cuadrad|marcador|marker|naranja|orange|square)", goal.lower())
+    return int(m.group(1)) if m else _DEFAULT_MARKER_COUNT
+
+
+def _target_height_cm(goal: str) -> int | None:
+    """Absolute climb height (cm) parsed from the goal, or None. Only triggers when the
+    goal actually asks to gain altitude (a climb verb), so a distance like 'within 1 m of
+    the plant' is not mistaken for a height. Accepts '1.9 m', '1,9m', "1'9 m", '190 cm'."""
+    g = goal.lower()
+    if not re.search(r"sub[ei]|asciend|elev|altura|alto|rise|climb|height|up to|hover at", g):
+        return None
+    if m := re.search(r"(\d)\s*[.,']\s*(\d)\s*m\b", g):       # 1.9 m / 1,9m / 1'9 m
+        h = int(m.group(1)) * 100 + int(m.group(2)) * 10
+    elif (m := re.search(r"(\d{2,3})\s*cm\b", g)):            # 190 cm
+        h = int(m.group(1))
+    elif (m := re.search(r"(\d)\s*m\b", g)):                  # 2 m
+        h = int(m.group(1)) * 100
+    else:
+        return None
+    return max(config.MIN_HEIGHT_CM, min(h, config.MAX_HEIGHT_CM))
+
+
+def _normalize_steps(steps: list[dict], goal: str) -> list[dict]:
+    """Make the marker-survey contract deterministic regardless of what the VLM emitted:
+    colour-marker finds become fixed-vantage (approach=false) and require all N markers in
+    view; and if the goal asks to gain altitude, a self-correcting `climb` to that absolute
+    height is injected up front (replacing any relative 'move up' the VLM guessed)."""
+    height = _target_height_cm(goal)
+    n = _markers_wanted(goal)
+    out: list[dict] = []
+    for s in steps:
+        if not isinstance(s, dict):
+            out.append(s)
+            continue
+        t = s.get("type", "find")
+        if t == "find" and markers.is_marker_query(s.get("object", "")):
+            s["approach"] = False                      # frame from a vantage, never approach
+            if int(s.get("count", 1) or 1) < n:
+                s["count"] = n                          # wait for all markers, don't shoot on one
+        # drop the VLM's altitude guesses; we inject an absolute climb below
+        if height is not None and (t == "climb" or (t == "move" and s.get("direction") == "up")):
+            continue
+        out.append(s)
+    if height is not None:
+        out.insert(0, {"type": "climb", "height_cm": height})
+    return out
 
 
 def _step_desc(step: dict | None) -> str:
@@ -54,6 +114,8 @@ def _step_desc(step: dict | None) -> str:
         return f"rotate {step.get('direction', 'left')} {step.get('degrees', 90)}°"
     if t == "move":
         return f"move {step.get('direction', 'forward')} {step.get('cm', 50)}cm"
+    if t == "climb":
+        return f"climb to {step.get('height_cm', config.MAX_HEIGHT_CM)}cm"
     if t == "return":
         return "return to start"
     if t == "watch":
@@ -113,6 +175,7 @@ class AgentBrain:
             try:
                 if not self.state.steps:                 # one-time goal decomposition
                     steps = self.vlm.decompose(self.state.goal)
+                    steps = _normalize_steps(steps, self.state.goal)  # enforce the survey contract
                     self.state.set_steps(steps)
                     if len(self.state.steps) > 1:
                         self.log("[brain] goal split into "
@@ -181,17 +244,30 @@ class AgentBrain:
             return self._maneuver_step(st, step)
 
         if not st.target_queries:
-            return ("hover",)                            # waiting for the first VLM plan
+            # Seed the detector straight from the step's object so the find works even
+            # before the first VLM plan (or with Ollama down) — same deterministic
+            # targeting as watch/maneuver steps. The planner may still refine it while
+            # SEARCHING. Critical for colour markers, whose name must reach the detector
+            # verbatim to hit the HSV path.
+            obj = (step.get("object") or "").strip()
+            if not obj:
+                return ("hover",)                        # truly ambiguous → wait for the VLM
+            self.tools["set_target"].run({"queries": [obj]})
+            self.log(f"[brain] find → target {obj!r} (seeded from step)")
+            return ("hover",)
 
         dets = self.worker.detections if self.worker is not None else []
 
         if st.phase == S.SEARCH:
             # `count` = how many of the target must be in view at once (default 1).
-            # `approach` (default true) = fly toward it before the shot; false means a
-            # fixed-vantage survey — frame N markers from altitude and shoot WITHOUT
-            # closing in (the aerial-cenital case: see all 4 floor markers, no approach).
+            # `approach` = fly toward it before the shot; when omitted it DEFAULTS to
+            # (need == 1): you cannot close in on several separate markers at once, so a
+            # multi-marker find is inherently a fixed-vantage survey — frame them from
+            # altitude and shoot WITHOUT approaching (the aerial-cenital case). This is
+            # deterministic so the mission no longer depends on the VLM emitting
+            # `approach:false`, which it frequently forgets.
             need = max(1, int(step.get("count", 1)))
-            approach = step.get("approach", True)
+            approach = bool(step["approach"]) if step.get("approach") is not None else (need == 1)
             # Best-effort: if the room was swept and N never co-appeared, shoot whatever
             # is framed anyway so the pipeline never hangs — the homography downstream is
             # the real validator (it rejects a bad frame and the orchestrator retakes).
@@ -317,6 +393,8 @@ class AgentBrain:
     # ── fast loop: deterministic maneuver steps (no VLM, no detector) ─────────────
     def _maneuver_step(self, st: S.MissionState, step: dict) -> Action:
         t = step["type"]
+        if t == "climb":
+            return self._climb_step(st, step)
         if t == "rotate":
             deg = int(step.get("degrees", 90))
             signed = deg if step.get("direction") == "right" else -deg
@@ -346,6 +424,27 @@ class AgentBrain:
                      f"egress (Phase G/H, not built): {step.get('text', '')!r}")
         self._complete_step()
         return ("hover",)
+
+    def _climb_step(self, st: S.MissionState, step: dict) -> Action:
+        """Ascend to an ABSOLUTE height, self-correcting off measured telemetry each tick.
+        Unlike a relative 'move up' (whose bookkeeping is lost if a chunk is refused at the
+        cap), this re-reads the height every tick and keeps issuing up-steps until the target
+        is reached or the cap leaves no room for a min-step — so it reliably gains altitude
+        regardless of takeoff height."""
+        target = min(int(step.get("height_cm", config.MAX_HEIGHT_CM)), config.MAX_HEIGHT_CM)
+        h = (self.get_telemetry() or {}).get("height_cm")
+        if h is None:                                    # no reading — one best-effort step, move on
+            self.log("[brain] climb: no height telemetry — single best-effort ascent")
+            self._complete_step()
+            return ("move", "up", config.MAX_STEP_CM)
+        room = config.MAX_HEIGHT_CM - h                  # headroom before the cap refuses a step
+        if h >= target - _CLIMB_TOL_CM or room < config.MIN_STEP_CM:
+            self.log(f"[brain] at survey altitude {h}cm (target {target}cm) → next step")
+            self._complete_step()
+            return ("hover",)
+        chunk = min(config.MAX_STEP_CM, room, max(config.MIN_STEP_CM, target - h))
+        self.log(f"[brain] climb: {h}cm → {target}cm (up {chunk}cm)")
+        return ("move", "up", chunk)
 
     def _return_step(self, st: S.MissionState) -> Action:
         """Dead-reckon back toward the takeoff point with discrete body-frame moves.
@@ -389,10 +488,10 @@ class AgentBrain:
         now = time.monotonic()
         if now < st.search_dwell_until:
             return ("hover",)                         # hold still so the detector scans this view
-        if st.search_swept_deg < 360:                 # keep turning in place
+        if st.search_swept_deg < 360:                 # keep turning in place (counter-clockwise)
             st.search_swept_deg += _SEARCH_YAW_STEP
             st.search_dwell_until = now + _SEARCH_DWELL_S
-            return ("rotate", _SEARCH_YAW_STEP)
+            return ("rotate", -_SEARCH_YAW_STEP)      # negative = anticlockwise (arbiter convention)
         if st.search_vantages + 1 >= _SEARCH_MAX_VANTAGES:
             st.message = "target not found — room swept; hovering"
             if not st.search_exhausted:               # warn once, not every tick

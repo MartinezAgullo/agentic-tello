@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 
 import config
+from perception import markers
 
 # Default broad vocabulary for the "detect all" button — the 80 COCO classes the
 # YOLO-World backbone was distilled on (its sweet spot). Open-vocab still lets you
@@ -49,13 +50,22 @@ class Detector:
         self.model = YOLO(model or config.DETECTOR_MODEL)
         self.model.to(self.device)
         self.queries: list[str] = []
+        self._yolo_queries: list[str] = []               # subset served by YOLO (label lookup)
+        self._marker_specs: list[tuple[str, list]] = []  # colour-CV targets (see markers.py)
 
     def set_queries(self, queries: list[str]) -> None:
-        """Set the things to look for (open-vocabulary class names)."""
+        """Set the things to look for (open-vocabulary class names).
+
+        Queries naming a colour marker (e.g. "orange square") are routed to the
+        deterministic HSV colour detector instead of YOLO-World, which is unreliable
+        on abstract geometric/colour fiducials. The rest stay on YOLO.
+        """
         queries = [q.strip() for q in queries if q.strip()]
         self.queries = queries
-        if queries:
-            self.model.set_classes(queries)
+        self._marker_specs = markers.specs_for_queries(queries)
+        self._yolo_queries = [q for q in queries if not markers.is_marker_query(q)]
+        if self._yolo_queries:
+            self.model.set_classes(self._yolo_queries)
 
     def detect(self, frame: np.ndarray, conf: float | None = None) -> list[dict]:
         """Return detections for the current queries on `frame`.
@@ -65,22 +75,24 @@ class Detector:
         """
         if not self.queries or frame is None or frame.size == 0:
             return []
-        res = self.model.predict(
-            frame, conf=conf or config.DETECT_CONF,
-            device=self.device, verbose=False,
-        )[0]
-        h, w = frame.shape[:2]
-        out: list[dict] = []
-        for b in res.boxes:
-            x1, y1, x2, y2 = (float(v) for v in b.xyxy[0].tolist())
-            cls = int(b.cls[0])
-            out.append({
-                "label": self.queries[cls] if cls < len(self.queries) else str(cls),
-                "score": float(b.conf[0]),
-                "box": (x1, y1, x2, y2),
-                "center": ((x1 + x2) / 2, (y1 + y2) / 2),
-                "area_frac": ((x2 - x1) * (y2 - y1)) / float(w * h),
-            })
+        # Colour markers go through deterministic HSV CV (markers.py); YOLO handles the rest.
+        out: list[dict] = markers.detect(frame, self._marker_specs) if self._marker_specs else []
+        if self._yolo_queries:
+            res = self.model.predict(
+                frame, conf=conf or config.DETECT_CONF,
+                device=self.device, verbose=False,
+            )[0]
+            h, w = frame.shape[:2]
+            for b in res.boxes:
+                x1, y1, x2, y2 = (float(v) for v in b.xyxy[0].tolist())
+                cls = int(b.cls[0])
+                out.append({
+                    "label": self._yolo_queries[cls] if cls < len(self._yolo_queries) else str(cls),
+                    "score": float(b.conf[0]),
+                    "box": (x1, y1, x2, y2),
+                    "center": ((x1 + x2) / 2, (y1 + y2) / 2),
+                    "area_frac": ((x2 - x1) * (y2 - y1)) / float(w * h),
+                })
         out.sort(key=lambda d: d["score"], reverse=True)
         return out
 
