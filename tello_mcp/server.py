@@ -53,11 +53,19 @@ _Tool = tuple[str, dict, str, str, object]
 _TOOLS: dict[str, _Tool] = {
     # mission lifecycle (the orchestrator's main path)
     "start_mission": (
-        "Start an autonomous mission from a natural-language goal (e.g. 'go to the "
-        "plant and take a picture'). The drone arms AUTO, takes off, then searches / "
-        "approaches / captures on its own. Returns a mission_id; poll mission_status.",
-        {"goal": {"type": "string"}},
-        "POST", "/mission", lambda a: {"goal": a.get("goal", "")}),
+        "Start an autonomous mission. Either a natural-language goal (e.g. 'go to the plant "
+        "and take a picture') — the drone's VLM decomposes it — OR a deterministic colour-"
+        "marker survey by passing `markers` (N): the drone climbs and frames N colour markers "
+        "WITHOUT approaching, then captures (the reliable 'find the N markers' capability, no "
+        "VLM). Optional for the survey: marker_query (default 'orange square'), "
+        "survey_height_cm. Returns a mission_id; poll mission_status.",
+        {"goal": {"type": "string"},
+         "markers": {"type": "integer"},
+         "marker_query": {"type": "string"},
+         "survey_height_cm": {"type": "number"}},
+        "POST", "/mission", lambda a: {k: a[k] for k in
+                                       ("goal", "markers", "marker_query", "survey_height_cm")
+                                       if a.get(k) is not None}),
     "mission_status": (
         "Poll the mission blackboard. phase=='done' means the goal is satisfied; "
         "photo_available flags a capture you can fetch with get_mission_photo.",

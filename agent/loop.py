@@ -108,6 +108,18 @@ def _normalize_steps(steps: list[dict], goal: str) -> list[dict]:
     return out
 
 
+def _is_marker_survey(step: dict) -> bool:
+    """A fixed-vantage colour-marker find: the detector target is a marker query (HSV CV path)
+    and we do NOT approach (explicit approach=false, or a multi-marker find which defaults to
+    no-approach). Such a step is fully deterministic and needs no VLM planning."""
+    if step.get("type", "find") != "find" or not markers.is_marker_query(step.get("object", "")):
+        return False
+    approach = step.get("approach")
+    if approach is None:
+        return int(step.get("count", 1) or 1) > 1     # multi-marker defaults to no-approach
+    return not bool(approach)
+
+
 def _step_desc(step: dict | None) -> str:
     """Short human label for a typed step (logs / UI)."""
     if not step:
@@ -158,6 +170,31 @@ class AgentBrain:
             return
         self.state.reset(goal)
         self.log(f"[brain] mission armed: {goal!r} (Arm AUTO to let it fly)")
+        self._ensure_planner()
+
+    def start_survey(self, n: int = _DEFAULT_MARKER_COUNT, marker_query: str = "orange square",
+                     height_cm: int | None = None, goal_text: str = "") -> None:
+        """Arm the deterministic aerial **marker survey** directly — no VLM decomposition.
+
+        This is the orchestrator's reliable entry point for "find the N colour markers": it
+        installs the survey steps itself (optional climb to `height_cm`, then a fixed-vantage
+        `find` of `marker_query` with `count=n, approach=false`), so the result never depends
+        on the VLM extracting the right noun. The marker query goes verbatim to the detector
+        (HSV colour CV in perception/markers.py); the planner skips VLM planning for it."""
+        goal = goal_text.strip() or f"aerial marker survey: frame {n} {marker_query} marker(s)"
+        if self.state.active and goal == self.state.goal.strip():
+            self.log(f"[brain] survey already running: {goal!r} (ignoring duplicate)")
+            return
+        steps: list[dict] = []
+        if height_cm:
+            steps.append({"type": "climb", "height_cm": int(height_cm)})
+        steps.append({"type": "find", "object": marker_query, "count": int(n), "approach": False})
+        self.state.reset(goal)
+        self.state.set_steps(steps)                      # planner sees steps → skips decompose
+        self.log(f"[brain] marker survey armed (no VLM): {[_step_desc(s) for s in steps]}")
+        self._ensure_planner()
+
+    def _ensure_planner(self) -> None:
         if self._thread is None or not self._thread.is_alive():
             self._stop.clear()
             self._thread = threading.Thread(target=self._planner, daemon=True)
@@ -190,7 +227,12 @@ class AgentBrain:
                 # Only "find" steps need the VLM (it picks the detector target). Maneuver
                 # steps (rotate/move/return/unsupported) run deterministically in the fast
                 # loop — planning them would only churn the detector target needlessly.
-                if step is not None and step.get("type", "find") == "find":
+                # A fixed-vantage colour-marker survey is ALSO fully deterministic: the
+                # detector is seeded with the marker query (HSV CV) and completion is the
+                # count-based CAPTURE — so skip the VLM there too, or it could clobber the
+                # pinned marker target with a different noun.
+                if step is not None and step.get("type", "find") == "find" \
+                        and not _is_marker_survey(step):
                     dets = self.worker.detections if self.worker is not None else []
                     decision = self.vlm.plan(
                         self.state.current_goal(), self.get_frame(), dets,

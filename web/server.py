@@ -275,6 +275,17 @@ def _handle_cmd(arb: ControlArbiter, c: TelloController, name: str, args: tuple)
         else:
             log(f"Goal stored: {args[0]!r} (brain still loading)")
         return f"goal set: {args[0]!r}"
+    elif name == "survey":
+        # Deterministic colour-marker survey (no VLM): the brain installs the steps itself.
+        n, marker_query, height_cm, goal_text = args
+        _goal = goal_text or f"marker survey: {n}x {marker_query}"
+        brain = _sys.get("brain")
+        if brain is not None:
+            brain.start_survey(n=int(n), marker_query=marker_query,
+                               height_cm=height_cm, goal_text=goal_text)
+        else:
+            log(f"Survey requested ({n}x {marker_query}) but brain still loading")
+        return f"survey armed: {n}x {marker_query}"
     else:
         raise ValueError(f"unknown command {name!r}")
 
@@ -560,22 +571,35 @@ def _run_cmd(name: str, args: tuple = (), timeout: float = 10.0):
 # --- mission lifecycle (the orchestrator's main path) ------------------------
 @app.post("/mission", status_code=202)
 def post_mission(body: dict) -> dict:
-    """Start an autonomous mission: goal → arm AUTO → takeoff. Returns immediately;
-    the mission runs for seconds on the control thread (poll GET /mission/status)."""
+    """Start an autonomous mission: (goal | marker survey) → arm AUTO → takeoff. Returns
+    immediately; the mission runs for seconds on the control thread (poll GET /mission/status).
+
+    Two modes:
+    - NL goal:        body = {"goal": "..."} → the VLM decomposes it.
+    - Marker survey:  body = {"markers": N, "marker_query"?: "orange square",
+                              "survey_height_cm"?: 160, "goal"?: "..."} → the drone runs the
+      deterministic colour-marker survey (climb + fixed-vantage find, no approach), bypassing
+      the VLM. This is the reliable "find the N markers" capability."""
     goal = (body.get("goal") or "").strip()
-    if not goal:
-        raise HTTPException(422, "missing 'goal'")
+    markers = body.get("markers")
+    if not goal and markers is None:
+        raise HTTPException(422, "missing 'goal' (or 'markers' for a marker survey)")
     if _sys.get("arb") is None:
         raise HTTPException(503, _status.get("error") or "drone not ready")
     global _mission
     mid = f"m_{int(time.time() * 1000)}"
-    _mission = {"id": mid, "goal": goal, "ts": int(time.time() * 1000)}
+    label = goal or f"marker survey ({markers})"
+    _mission = {"id": mid, "goal": label, "ts": int(time.time() * 1000)}
     _status.pop("mission_photo", None)                 # clear the previous mission's photo
-    _enqueue("goal", (goal,))                          # async: same sequence as the WS UI
+    if markers is not None:                            # deterministic marker survey
+        _enqueue("survey", (int(markers), body.get("marker_query") or "orange square",
+                            body.get("survey_height_cm"), goal))
+    else:
+        _enqueue("goal", (goal,))                      # async: same sequence as the WS UI
     _enqueue("mode", ("AUTO",))
     _enqueue("takeoff", ())
-    log(f"[rest] mission {mid} started: {goal!r}")
-    return {"mission_id": mid, "goal": goal, "ts": _mission["ts"]}
+    log(f"[rest] mission {mid} started: {label!r}")
+    return {"mission_id": mid, "goal": label, "ts": _mission["ts"]}
 
 
 @app.get("/mission/status")
