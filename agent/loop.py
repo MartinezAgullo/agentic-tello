@@ -186,11 +186,27 @@ class AgentBrain:
         dets = self.worker.detections if self.worker is not None else []
 
         if st.phase == S.SEARCH:
-            if dets:
-                st.phase = S.APPROACH
+            # `count` = how many of the target must be in view at once (default 1).
+            # `approach` (default true) = fly toward it before the shot; false means a
+            # fixed-vantage survey — frame N markers from altitude and shoot WITHOUT
+            # closing in (the aerial-cenital case: see all 4 floor markers, no approach).
+            need = max(1, int(step.get("count", 1)))
+            approach = step.get("approach", True)
+            # Best-effort: if the room was swept and N never co-appeared, shoot whatever
+            # is framed anyway so the pipeline never hangs — the homography downstream is
+            # the real validator (it rejects a bad frame and the orchestrator retakes).
+            exhausted = (not approach) and st.search_exhausted
+            if len(dets) >= need or exhausted:
                 st.lost = 0
                 self._last_det = None             # don't coast on a previous target's box
-                self.log("[brain] target acquired → approach")
+                if approach:
+                    st.phase = S.APPROACH
+                    self.log(f"[brain] target acquired ({len(dets)}/{need}) → approach")
+                else:
+                    st.phase = S.CAPTURE
+                    self.log(f"[brain] {len(dets)} target(s) in view (need {need})"
+                             + (" — room swept, best-effort" if exhausted else "")
+                             + " → capture (no approach)")
                 return ("hover",)
             return self._search_step(st)
 

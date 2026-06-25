@@ -78,6 +78,11 @@ right", "through the door") — then emit steps, in order. There are six step "t
               qualifier: "look for a potted plant in the living room" → object "potted plant".
               "find X", "look for X", "approach X", "go to X", "take a picture of X" are all
               find. A find step is NEVER unsupported, no matter which room the object is in.
+              Optional fields for an AERIAL SURVEY (e.g. "see all 4 markers from above and
+              shoot one photo without approaching"): "count" (how many of the object must be
+              in view at once before the photo; default 1) and "approach" (default true;
+              false = stay put and frame them from altitude, do NOT fly toward them — use
+              false whenever the operator wants an overhead/cenital photo of several markers).
 2. "move"   — translate a fixed distance. Fields: "direction" ("forward"|"back"|"left"|
               "right"|"up"|"down"), "cm" (estimate; use ~150-250 to cross a doorway or reach
               the next area, ~50-100 within a room). USE THIS to follow the operator's
@@ -116,6 +121,14 @@ EXAMPLE
 Goal: "Wait until a person appears and when they appear take a snapshot every 10 seconds."
 {"steps": [
   {"type":"watch","object":"person","interval_s":10,"approach":false}
+]}
+
+EXAMPLE
+Goal: "Rise to about 1.8 m and rotate until you can see the 4 orange square markers on the
+floor, then take one aerial photo without approaching them."
+{"steps": [
+  {"type":"move","direction":"up","cm":100},
+  {"type":"find","object":"orange square","count":4,"approach":false}
 ]}
 
 Keep the original order. A single-object goal is ONE find step.
