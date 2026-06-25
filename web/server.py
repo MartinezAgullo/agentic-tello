@@ -597,7 +597,14 @@ def post_mission(body: dict) -> dict:
     else:
         _enqueue("goal", (goal,))                      # async: same sequence as the WS UI
     _enqueue("mode", ("AUTO",))
-    _enqueue("takeoff", ())
+    # Only take off if grounded. On a re-shoot the drone is already hovering at survey
+    # altitude — re-issuing takeoff there just errors ('takeoff unsuccessful') and the
+    # survey re-runs from where it is, so the drone holds position instead of fighting.
+    arb = _sys.get("arb")
+    if arb is None or not arb.safe.flying:
+        _enqueue("takeoff", ())
+    else:
+        log(f"[rest] mission {mid}: drone already airborne — skipping takeoff (re-shoot in place)")
     log(f"[rest] mission {mid} started: {label!r}")
     return {"mission_id": mid, "goal": label, "ts": _mission["ts"]}
 
