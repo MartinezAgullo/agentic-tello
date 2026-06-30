@@ -165,10 +165,16 @@ The detector weights download automatically on first run (ultralytics).
 
 ## Running
 
+> **Sync once, with internet.** After cloning or changing dependencies, run `uv sync`
+> on a normal connection to build the environment. When you're connected to the Tello's
+> WiFi there is **no internet**, so plain `uv run` would fail trying to reach pypi to
+> re-sync the project. For that reason the commands below (and the launch script) pass
+> **`--no-sync`** — they use the already-built `.venv` and never touch the network.
+
 ### 1. Bench test first (props OFF)
 
 ```bash
-uv run python bench_test.py
+uv run --no-sync python bench_test.py
 ```
 
 Validates connection, telemetry, a live frame, that the agent is blocked while MANUAL,
@@ -177,20 +183,51 @@ and that the geofence rejects an out-of-bounds move — **without spinning the m
 ### 2. Launch the full system
 
 ```bash
-uv run python main.py
+./launch_drone_agent.sh
+```
+
+This is the recommended path: it runs **pre-flight checks** (uv, Ollama + the VLM model,
+Tello WiFi at `192.168.10.1`, Docker), **auto-starts `ollama serve`** if it's down,
+brings up the **NodeODM** photogrammetry container idempotently (no name clash on
+re-launch), and then starts the system. Useful flags:
+
+```bash
+./launch_drone_agent.sh --check    # run the pre-flight checks only, then exit
+./launch_drone_agent.sh --no-odm   # skip NodeODM (no 3D reconstruction)
+./launch_drone_agent.sh --yes      # don't stop on warnings (unattended)
+```
+
+To start it directly without the wrapper:
+
+```bash
+uv run --no-sync python -m agentic_tello
 ```
 
 Then open **http://localhost:8000** (or `http://<host>:8000` from another machine — the
 server binds `0.0.0.0`). Type a goal in the goal box, **Arm AUTO**, and the agent flies.
 Manual keyboard control and **E-STOP** are always available.
 
+### 3. Shut down
+
+```bash
+./stop_drone_agent.sh
+```
+
+Orderly shutdown, **drone first**: if the dashboard is up it commands a **safe landing**
+via REST and waits for touchdown, then stops the agent + dashboard and the NodeODM
+container. Ollama is **left running** by default (kept warm). Flags: `--no-land` (drone
+already down), `--stop-ollama` (also stop the Ollama that launch started).
+
+> If the dashboard process has already died, the script **cannot** land the drone (that
+> process owns the link) — it will warn you to land manually.
+
 ### Web dashboard only (manual flight / detector check)
 
 ```bash
-uv run python -m web.server
+uv run --no-sync python -m agentic_tello.web.server
 ```
 
-See the [web README](web/README.md) for controls, the first-flight checklist, and the
+See the [web README](agentic_tello/web/README.md) for controls, the first-flight checklist, and the
 WebSocket protocol.
 
 ---

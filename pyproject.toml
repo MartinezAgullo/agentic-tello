@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentic-tello"
-version = "0.1.0"
+version = "0.1.1"
 description = "Agentic vision-driven Tello controller — local VLM + open-vocab detector, sense-plan-act"
 readme = "README.md"
 authors = [

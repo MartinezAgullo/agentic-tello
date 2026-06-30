@@ -41,3 +41,6 @@ to_do.md
 .github/copilot-instructions.md
 GEMINI.md
 .windsurfrules
+
+# runtime pidfiles/logs from launch_drone_agent.sh
+.run/
