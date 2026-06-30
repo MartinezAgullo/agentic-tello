@@ -101,8 +101,8 @@ re-arming AUTO is always explicit. Emergency stop bypasses every guard.
 | `agentic_tello/` | **Main package** — all source code lives here |
 | `agentic_tello/tello_tools/` | Core control library: connection, low-latency video, **all safety guards** ([README](agentic_tello/tello_tools/README.md)) |
 | `agentic_tello/perception/` | Open-vocab YOLO-World detector + its worker thread ([README](agentic_tello/perception/README.md)) |
-| `agentic_tello/brain/` | Ollama VLM client + planning prompts |
-| `agentic_tello/agent/` | Dual-cadence sense-plan-act loop, mission state, servoing |
+| `agentic_tello/brain/` | Ollama VLM client + planning prompts ([README](agentic_tello/brain/README.md)) |
+| `agentic_tello/agent/` | Dual-cadence sense-plan-act loop, mission state, servoing ([README](agentic_tello/agent/README.md)) |
 | `agentic_tello/web/` | FastAPI dashboard: feed+overlay, decision log, goal box, manual control, E-STOP ([README](agentic_tello/web/README.md)) |
 | `agentic_tello/photogrammetry/` | Offline 3D reconstruction via OpenDroneMap ([README](agentic_tello/photogrammetry/README.md)) |
 | `agentic_tello/tools.py` | The single tool registry (one source of truth for every agent/MCP action) |
@@ -122,7 +122,7 @@ The web server (`:8000`) exposes a REST surface for external integration (orches
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/mission` | `POST` | Start an autonomous mission (NL goal or marker survey) — returns 202 |
+| `/mission` | `POST` | Start an autonomous mission (NL goal **or** marker survey) — returns 202 |
 | `/mission/status` | `GET` | Poll mission progress (phase, photo availability) |
 | `/mission/photo` | `GET` | Download the last snapshot captured by the mission |
 | `/mission/done` | `POST` | Declare the current goal satisfied |
@@ -141,6 +141,16 @@ The web server (`:8000`) exposes a REST surface for external integration (orches
 
 All control endpoints funnel through the single actuation thread — they never touch
 djitellopy directly.
+
+### Marker survey mode
+
+`POST /mission` accepts a second mode for the UAV+UGV coordination use case: instead of a
+natural-language `goal`, pass `{"markers": N}` (optionally with `marker_query` and
+`survey_height_cm`). This triggers a **deterministic survey** that bypasses the VLM: the drone
+climbs to the requested height and searches for `N` colour markers using **HSV segmentation**
+(see [`perception/markers.py`](agentic_tello/perception/README.md#colour-marker-detection-markerspy))
+instead of YOLO-World. The HSV path activates automatically when the query contains the
+keyword `orange` (or `naranja`).
 
 ---
 

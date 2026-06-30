@@ -1,8 +1,7 @@
 # photogrammetry/ — offline 3D reconstruction
 
 Turns a set of drone snapshots into a textured 3D model, fully offline, using
-[OpenDroneMap](https://www.opendronemap.org/) driven through
-[PyODM](https://github.com/OpenDroneMap/PyODM).
+[OpenDroneMap](https://www.opendronemap.org/) driven through [PyODM](https://github.com/OpenDroneMap/PyODM).
 
 ## Pipeline
 
