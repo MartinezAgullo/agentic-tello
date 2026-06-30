@@ -20,13 +20,17 @@ goal: "find the backpack and take a picture"
 
 ## How it works
 
+<p align="center">
+  <img src="docs/schemes/esquema_funcional.svg" alt="Functional schema — dual-loop sense-plan-act" width="900"/>
+</p>
+
 A single GPU means latency is governed by *cadence*, not by the number of models.
 The system is split into **two decoupled loops**:
 
 | Loop | Cadence | Runs | Job |
 |------|---------|------|-----|
 | **Fast** | every new frame | open-vocab detector + deterministic servoing | track the target, center & approach it — **no VLM** |
-| **Slow** | every few seconds | VLM (Qwen2.5-VL via Ollama) | turn the goal into detector targets, judge completion — **never actuates** |
+| **Slow** | every few seconds | VLM (Gemma 3 via Ollama) | turn the goal into detector targets, judge completion — **never actuates** |
 
 The mission advances through a small phase machine — `SEARCH → APPROACH → CAPTURE →
 DONE` — driven by the fast loop, while the VLM only re-plans while hovering. For a
@@ -74,26 +78,16 @@ captures each in turn before moving to the next. This is fully general — any g
 A single-object goal stays one step and behaves exactly as before. Words like *then*, *after*,
 *next*, *afterwards* mark sequential steps.
 
-### Layering (one actuation chokepoint)
+---
+
+## Actuation chokepoint
 
 Every command funnels through a single chain, so safety guards can't be bypassed
 (except the explicit emergency cut):
 
-```
-tools / agent loop / web UI
-        │
-        ▼
-ControlArbiter   ── AUTO vs MANUAL; operator input always preempts the agent
-        │
-        ▼
-SafeTello        ── clamps steps, geofence, height/battery caps, command watchdog
-        │
-        ▼
-TelloController  ── raw djitellopy + low-latency video stream
-        │
-        ▼
-      Tello
-```
+<p align="center">
+  <img src="docs/schemes/esquema_arquitectura.svg" alt="Architecture — one actuation chokepoint" width="900"/>
+</p>
 
 **Manual override is safety-grade:** any operator input preempts the agent to MANUAL;
 re-arming AUTO is always explicit. Emergency stop bypasses every guard.
@@ -104,16 +98,49 @@ re-arming AUTO is always explicit. Emergency stop bypasses every guard.
 
 | Path | What's in it |
 |------|--------------|
-| `tello_tools/` | Core control library: connection, low-latency video, **all safety guards** ([README](tello_tools/README.md)) |
-| `perception/` | Open-vocab YOLO-World detector + its worker thread ([README](perception/README.md)) |
-| `brain/` | Ollama VLM client + planning prompts |
-| `agent/` | Dual-cadence sense-plan-act loop, mission state, servoing |
-| `tello_mcp/` | Thin MCP server wrapping the same tool registry, for **external** clients only — **not used by the in-process agent** ([README](tello_mcp/README.md)) |
-| `web/` | FastAPI dashboard: feed+overlay, decision log, goal box, manual control, E-STOP ([README](web/README.md)) |
-| `tools.py` | The single tool registry (one source of truth for every agent/MCP action) |
-| `config.py` | Every safety cap, cadence, and model name |
-| `main.py` | Single entrypoint — wires everything and serves the dashboard |
+| `agentic_tello/` | **Main package** — all source code lives here |
+| `agentic_tello/tello_tools/` | Core control library: connection, low-latency video, **all safety guards** ([README](agentic_tello/tello_tools/README.md)) |
+| `agentic_tello/perception/` | Open-vocab YOLO-World detector + its worker thread ([README](agentic_tello/perception/README.md)) |
+| `agentic_tello/brain/` | Ollama VLM client + planning prompts |
+| `agentic_tello/agent/` | Dual-cadence sense-plan-act loop, mission state, servoing |
+| `agentic_tello/web/` | FastAPI dashboard: feed+overlay, decision log, goal box, manual control, E-STOP ([README](agentic_tello/web/README.md)) |
+| `agentic_tello/photogrammetry/` | Offline 3D reconstruction via OpenDroneMap ([README](agentic_tello/photogrammetry/README.md)) |
+| `agentic_tello/tools.py` | The single tool registry (one source of truth for every agent/MCP action) |
+| `agentic_tello/config.py` | Every safety cap, cadence, and model name |
+| `agentic_tello/main.py` | Single entrypoint — wires everything and serves the dashboard |
+| `tello_mcp/` | Thin MCP server (separate process, HTTP proxy to `:8000`) — **not used by the in-process agent** ([README](tello_mcp/README.md)) |
 | `bench_test.py` | Props-off validation of the whole stack — **run before any flight** |
+| `docs/` | Architecture diagrams, network setup, cenital-view model docs |
+| `snapshots/` | Runtime output (captures, BEV, 3D models) — gitignored except `.gitkeep` |
+
+---
+
+## REST API
+
+The web server (`:8000`) exposes a REST surface for external integration (orchestrator,
+`tello_mcp` proxy). Key endpoints:
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/mission` | `POST` | Start an autonomous mission (NL goal or marker survey) — returns 202 |
+| `/mission/status` | `GET` | Poll mission progress (phase, photo availability) |
+| `/mission/photo` | `GET` | Download the last snapshot captured by the mission |
+| `/mission/done` | `POST` | Declare the current goal satisfied |
+| `/control/takeoff` | `POST` | Take off |
+| `/control/land` | `POST` | Land |
+| `/control/move` | `POST` | Discrete move (`direction`, `cm`) |
+| `/control/rotate` | `POST` | Rotate (`deg`) |
+| `/control/mode` | `POST` | Switch `AUTO` / `MANUAL` |
+| `/control/emergency` | `POST` | Emergency motor cut |
+| `/control/snapshot` | `POST` | Save a snapshot |
+| `/control/target` | `POST` | Set open-vocab detector queries |
+| `/control/geofence` | `POST` | Enable / disable the geofence |
+| `/telemetry` | `GET` | Battery, height, attitude |
+| `/pose` | `GET` | Dead-reckoning position (x, y, heading) |
+| `/status` | `GET` | Full HUD snapshot |
+
+All control endpoints funnel through the single actuation thread — they never touch
+djitellopy directly.
 
 ---
 
@@ -128,7 +155,7 @@ Model names and the Ollama host are **env-overridable** — swap in newer models
 touching code:
 
 ```bash
-VLM_MODEL=qwen3-vl:8b DETECTOR_MODEL=yolov8x-worldv2.pt uv run python main.py
+VLM_MODEL=qwen3-vl:8b DETECTOR_MODEL=yolov8x-worldv2.pt uv run python -m agentic_tello
 ```
 
 ---
@@ -234,13 +261,13 @@ WebSocket protocol.
 
 ## Configuration
 
-All knobs live in [`config.py`](config.py) — conservative **indoor-small-room defaults**.
+All knobs live in [`config.py`](agentic_tello/config.py) — conservative **indoor-small-room defaults**.
 Tune these to your actual room before flying:
 
 | Setting | Default | Meaning |
 |---------|---------|---------|
 | `SPEED` | 40 cm/s | rc-control speed (manual + servoing) |
-| `MAX_HEIGHT_CM` | 180 | refuse ascend above this |
+| `MAX_HEIGHT_CM` | 200 | refuse ascend above this |
 | `GEOFENCE_RADIUS_CM` | 200 | dead-reckoning box radius from takeoff |
 | `MIN_STEP_CM` / `MAX_STEP_CM` | 20 / 50 | discrete move bounds |
 | `BATTERY_FLOOR_PCT` | 15 | auto-land at/below this |
