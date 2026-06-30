@@ -19,7 +19,7 @@ import av
 import numpy as np
 from djitellopy import Tello
 
-import config
+from agentic_tello import config
 
 # djitellopy adds its own noisy StreamHandler on import — silence it.
 _dji_logger = logging.getLogger("djitellopy")

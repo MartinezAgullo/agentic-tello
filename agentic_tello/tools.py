@@ -14,8 +14,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from tello_tools.primitives import get_telemetry as _get_telemetry
-from tello_tools.primitives import take_snapshot as _take_snapshot
+from agentic_tello.tello_tools.primitives import get_telemetry as _get_telemetry
+from agentic_tello.tello_tools.primitives import take_snapshot as _take_snapshot
 
 
 @dataclass

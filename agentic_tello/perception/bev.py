@@ -39,7 +39,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-import config
+from agentic_tello import config
 
 # DJI RoboMaster TT / Tello still-photo defaults live in config.py (env-overridable).
 DEFAULT_WIDTH = config.CAM_PHOTO_W

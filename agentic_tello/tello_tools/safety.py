@@ -14,8 +14,8 @@ safety backstop, not navigation truth. Emergency stop bypasses everything.
 import math
 import time
 
-import config
-from tello_tools.controller import TelloController
+from agentic_tello import config
+from agentic_tello.tello_tools.controller import TelloController
 
 
 class SafetyError(Exception):

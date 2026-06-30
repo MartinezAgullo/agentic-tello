@@ -10,11 +10,11 @@ takeoff/land are exercised only as dry assertions against the safety layer
 
 import time
 
-import config
-from tello_tools.arbiter import ArbiterBlocked, ControlArbiter
-from tello_tools.controller import TelloController
-from tello_tools.primitives import get_telemetry
-from tello_tools.safety import SafeTello, SafetyError
+from agentic_tello import config
+from agentic_tello.tello_tools.arbiter import ArbiterBlocked, ControlArbiter
+from agentic_tello.tello_tools.controller import TelloController
+from agentic_tello.tello_tools.primitives import get_telemetry
+from agentic_tello.tello_tools.safety import SafeTello, SafetyError
 
 
 def main() -> None:

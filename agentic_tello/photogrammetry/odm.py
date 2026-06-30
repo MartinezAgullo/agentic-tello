@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from pyodm import Node
 from pyodm.exceptions import NodeConnectionError, NodeResponseError, TaskFailedError
 
-import config
+from agentic_tello import config
 
 # Source images we are willing to feed into the reconstruction.
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")

@@ -12,8 +12,8 @@ First use downloads the weights (`config.DETECTOR_MODEL`).
 import cv2
 import numpy as np
 
-import config
-from perception import markers
+from agentic_tello import config
+from agentic_tello.perception import markers
 
 # Default broad vocabulary for the "detect all" button — the 80 COCO classes the
 # YOLO-World backbone was distilled on (its sweet spot). Open-vocab still lets you

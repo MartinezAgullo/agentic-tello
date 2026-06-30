@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "agentic-tello"
 version = "0.1.0"
@@ -25,6 +29,9 @@ dependencies = [
     "ultralytics>=8.4.60",
     "uvicorn[standard]>=0.48.0",
 ]
+
+[project.scripts]
+agentic-tello = "agentic_tello.main:main"
 
 [dependency-groups]
 dev = [

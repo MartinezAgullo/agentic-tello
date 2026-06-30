@@ -14,8 +14,8 @@ import time
 
 import cv2
 
-import config
-from tello_tools.controller import TelloController
+from agentic_tello import config
+from agentic_tello.tello_tools.controller import TelloController
 
 
 def snapshot_metadata(controller: TelloController, label: str = "snap") -> dict:

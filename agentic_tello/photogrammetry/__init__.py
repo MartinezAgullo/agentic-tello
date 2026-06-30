@@ -4,7 +4,7 @@ Thin wrapper around a local OpenDroneMap node, driven via PyODM. See
 :mod:`photogrammetry.odm` for the processing pipeline.
 """
 
-from photogrammetry.odm import (
+from agentic_tello.photogrammetry.odm import (
     PhotogrammetryError,
     craft_3d_model,
     list_models,

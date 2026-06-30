@@ -14,6 +14,10 @@ env var) as you update the system's brain.
 
 import math
 import os
+from pathlib import Path as _Path
+
+# Project root: one level above the agentic_tello/ package directory.
+_PROJECT_ROOT = _Path(__file__).resolve().parent.parent
 
 # ── video stream ────────────────────────────────────────────────────────────
 TELLO_STREAM_PORT = 11111
@@ -88,7 +92,7 @@ WEB_HOST = "0.0.0.0"
 WEB_PORT = 8000
 
 # ── output ──────────────────────────────────────────────────────────────────
-SNAPSHOT_DIR = "snapshots"
+SNAPSHOT_DIR = str(_PROJECT_ROOT / "snapshots")
 # Standard (operator) snapshots from the Snapshot button / P key land here.
 CAPTURES_DIR = os.path.join(SNAPSHOT_DIR, "captures")
 # Bird's-eye-view / pseudo-orthophoto outputs land in a sub-folder of snapshots.

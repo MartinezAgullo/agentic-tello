@@ -18,8 +18,8 @@ from collections.abc import Callable
 
 import numpy as np
 
-import config
-from perception.detector import Detector
+from agentic_tello import config
+from agentic_tello.perception.detector import Detector
 
 
 class PerceptionWorker:

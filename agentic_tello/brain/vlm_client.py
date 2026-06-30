@@ -20,8 +20,8 @@ import cv2
 import numpy as np
 import ollama
 
-import config
-from brain.prompts import (
+from agentic_tello import config
+from agentic_tello.brain.prompts import (
     DECOMPOSE_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     build_decompose_prompt,

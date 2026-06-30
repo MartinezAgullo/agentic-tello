@@ -1,6 +1,6 @@
 """Phase C — web dashboard + manual flight control.
 
-Run from the project root:  uv run python -m web.server
+Run from the project root:  uv run python -m agentic_tello.web.server
 Then open http://<host>:8000  (e.g. http://localhost:8000).
 
 Design: a single dedicated **control thread** owns every drone actuation (djitellopy
@@ -22,6 +22,7 @@ import queue
 import threading
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -29,20 +30,27 @@ from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDiscon
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-import config
-from agent.loop import AgentBrain
-from agent.servoing import Servoer
-from agent.state import MissionState
-from brain.vlm_client import VLMClient
-from perception.bev import generate_bev_panel
-from perception.detector import COCO_CLASSES, Detector
-from perception.worker import PerceptionWorker
-from photogrammetry import PhotogrammetryError, craft_3d_model, list_models, list_pending_images
-from tello_tools.arbiter import ArbiterBlocked, ControlArbiter
-from tello_tools.controller import TelloController
-from tello_tools.primitives import get_telemetry, take_snapshot
-from tello_tools.safety import SafeTello, SafetyError
-from tools import ToolContext, build_registry
+from agentic_tello import config
+from agentic_tello.agent.loop import AgentBrain
+from agentic_tello.agent.servoing import Servoer
+from agentic_tello.agent.state import MissionState
+from agentic_tello.brain.vlm_client import VLMClient
+from agentic_tello.perception.bev import generate_bev_panel
+from agentic_tello.perception.detector import COCO_CLASSES, Detector
+from agentic_tello.perception.worker import PerceptionWorker
+from agentic_tello.photogrammetry import (
+    PhotogrammetryError,
+    craft_3d_model,
+    list_models,
+    list_pending_images,
+)
+from agentic_tello.tello_tools.arbiter import ArbiterBlocked, ControlArbiter
+from agentic_tello.tello_tools.controller import TelloController
+from agentic_tello.tello_tools.primitives import get_telemetry, take_snapshot
+from agentic_tello.tello_tools.safety import SafeTello, SafetyError
+from agentic_tello.tools import ToolContext, build_registry
+
+_HERE = Path(__file__).resolve().parent
 
 # ── shared state (written by the control thread, read by handlers) ────────────
 # Each queue item is (name, args, future): the future is None for fire-and-forget
@@ -441,7 +449,7 @@ app = FastAPI(title="Agentic Tello", lifespan=lifespan)
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
-    with open("web/static/index.html") as f:
+    with open(_HERE / "static" / "index.html") as f:
         return f.read()
 
 
@@ -743,7 +751,7 @@ def get_status_route() -> dict:
 
 
 # mount static after routes so "/" stays our handler
-app.mount("/static", StaticFiles(directory="web/static"), name="static")
+app.mount("/static", StaticFiles(directory=_HERE / "static"), name="static")
 
 # serve crafted 3D model assets (OBJ/MTL/textures) for the Three.js viewer
 os.makedirs(config.MODELS_3D_DIR, exist_ok=True)

@@ -12,7 +12,7 @@ the target is roughly centered. Larger detections (closer objects) ⇒ bigger
 `area_frac`, which is the cheap distance proxy used for the approach.
 """
 
-import config
+from agentic_tello import config
 
 
 class Servoer:

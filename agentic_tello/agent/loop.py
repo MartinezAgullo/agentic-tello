@@ -22,11 +22,11 @@ import threading
 import time
 from collections.abc import Callable
 
-import config
-from agent import state as S
-from agent.servoing import Servoer
-from brain.prompts import SEARCH_HINTS as _SEARCH_HINTS
-from perception import markers
+from agentic_tello import config
+from agentic_tello.agent import state as S
+from agentic_tello.agent.servoing import Servoer
+from agentic_tello.brain.prompts import SEARCH_HINTS as _SEARCH_HINTS
+from agentic_tello.perception import markers
 
 # Actions returned by fast_step for the control thread to execute:
 #   ("rc", lr, fb, ud, yaw) | ("rotate", deg) | ("move", direction, cm)

@@ -121,7 +121,7 @@ re-arming AUTO is always explicit. Emergency stop bypasses every guard.
 
 | Role | Model | Served by | Notes |
 |------|-------|-----------|-------|
-| **Brain (VLM)** | Qwen2.5-VL 7B | [Ollama](https://ollama.com) (OpenAI-compatible API) | kept warm (`keep_alive=-1`); called *sparingly* for planning only |
+| **Brain (VLM)** | Gemma 3 12B | [Ollama](https://ollama.com) (OpenAI-compatible API) | kept warm (`keep_alive=-1`); called *sparingly* for planning only |
 | **Detector** | open-vocab YOLO-World | [ultralytics](https://docs.ultralytics.com) | runs on the fast loop for localization |
 
 Model names and the Ollama host are **env-overridable** — swap in newer models without
@@ -139,12 +139,15 @@ VLM_MODEL=qwen3-vl:8b DETECTOR_MODEL=yolov8x-worldv2.pt uv run python main.py
 - **[uv](https://docs.astral.sh/uv/)** for dependency management (never pip/poetry/conda directly)
 - **[Ollama](https://ollama.com)** running locally with a vision model pulled:
   ```bash
-  ollama pull qwen3-vl:8b      # or qwen2.5-vl; see config.py defaults
+  ollama pull gemma3:12b      # default; see config.py for alternatives
   ```
 - A **Tello** drone, and your machine joined to its WiFi (`TELLO-XXXXXX`)
 
-Supported platforms: **NVIDIA DGX Spark** (Linux, ARM64 + CUDA — primary) and
-**MacBook Pro M3** (macOS, Apple Silicon). Avoid platform-specific assumptions.
+Intended to run on an **NVIDIA DGX Spark** (Linux, ARM64 + CUDA). Can be controlled
+from any other machine via SSH port forwarding:
+```bash
+ssh -L 8000:localhost:8000 user@<spark-ip>
+```
 
 ---
 

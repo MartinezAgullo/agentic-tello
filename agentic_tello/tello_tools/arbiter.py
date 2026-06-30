@@ -12,7 +12,7 @@ bypasses the mode gate entirely.
 
 import threading
 
-from tello_tools.safety import SafeTello
+from agentic_tello.tello_tools.safety import SafeTello
 
 
 class ArbiterBlocked(Exception):
